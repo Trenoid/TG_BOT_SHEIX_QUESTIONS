@@ -64,6 +64,10 @@ def message_file_id(message: Message) -> str | None:
     return None
 
 
+def is_text_question_content(content_type: object | None, text: str | None) -> bool:
+    return normalize_content_type_value(content_type) == 'text' and bool(text and text.strip())
+
+
 def sender_label(item: dict) -> str:
     full_name = item.get('sender_full_name')
     username = item.get('sender_username')

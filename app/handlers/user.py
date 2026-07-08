@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.database import Database
 from app.keyboards import admin_panel_kb, cancel_kb, categories_kb, language_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
-from app.services import message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket
+from app.services import is_text_question_content, message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket
 from app.states import UserTicketState
 from app.utils import category_name, format_dt, language_name, normalize_lang, status_name, t
 
@@ -206,6 +206,9 @@ async def receive_question(message: Message, state: FSMContext, db: Database, ad
     data = await state.get_data()
     lang = data.get('language') or await db.get_user_language(message.from_user.id)
     category = data.get('category') or 'other'
+    if not is_text_question_content(message_content_type(message), message.text):
+        await message.answer(t(lang, 'text_question_only'), reply_markup=cancel_kb(lang))
+        return
     user = message.from_user
     full_name = user.full_name if user else 'Unknown'
     username = user.username if user else None

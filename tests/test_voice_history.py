@@ -2,7 +2,7 @@ import pytest
 
 from app.database import Database
 from app.keyboards import admin_answer_full_kb
-from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, content_type_label, normalize_content_type_value, publication_text, user_answer_intro_text
+from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, content_type_label, is_text_question_content, normalize_content_type_value, publication_text, user_answer_intro_text
 
 
 def _callback_data(markup):
@@ -12,6 +12,13 @@ def _callback_data(markup):
 def test_content_type_normalizes_aiogram_enum_string():
     assert normalize_content_type_value('ContentType.VOICE') == 'voice'
     assert content_type_label('ContentType.VOICE') == '🎙 Голосовое сообщение'
+
+
+def test_user_questions_accept_only_plain_text():
+    assert is_text_question_content('text', 'Вопрос текстом') is True
+    assert is_text_question_content('voice', None) is False
+    assert is_text_question_content('photo', 'caption should not count') is False
+    assert is_text_question_content('text', '   ') is False
 
 
 @pytest.mark.asyncio
