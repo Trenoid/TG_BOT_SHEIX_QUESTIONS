@@ -56,7 +56,7 @@ async def test_short_publication_is_sent_together_as_voice_caption():
 
     assert len(callback.bot.calls) == 1
     assert callback.bot.calls[0][0] == 'voice'
-    assert 'Ответы на вопросы' in callback.bot.calls[0][3]
+    assert 'Ответы Шейха' in callback.bot.calls[0][3]
 
 
 @pytest.mark.asyncio

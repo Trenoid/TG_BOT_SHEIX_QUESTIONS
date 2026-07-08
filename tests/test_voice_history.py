@@ -86,7 +86,7 @@ def test_publication_voice_answer_has_clean_media_label():
 
     assert '🎙 Голосовое сообщение' in text
     assert 'Оригинал вложения доступен' not in text
-    assert '<a href="https://t.me/test_channel_questions">Ответы на вопросы</a>' in text
+    assert '<a href="https://t.me/test_channel_questions">Ответы Шейха</a>' in text
 
 
 def test_answer_prompt_contains_question_text_without_question_number():

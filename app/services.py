@@ -273,9 +273,9 @@ def publication_text(row: dict, *, publication_channel: int | str | None = None,
     question = _publication_question_body(row)
     answer = _publication_answer_body(row)
     channel_url = channel_public_url(publication_channel)
-    channel_line = '✅ Ответы на вопросы'
+    channel_line = '✅ Ответы Шейха'
     if channel_url:
-        channel_line = f'✅ <a href="{h(channel_url)}">Ответы на вопросы</a>'
+        channel_line = f'✅ <a href="{h(channel_url)}">Ответы Шейха</a>'
 
     return '\n'.join([
         '<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>',
