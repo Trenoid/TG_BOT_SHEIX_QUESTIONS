@@ -2,7 +2,7 @@ import pytest
 
 from app.database import Database
 from app.keyboards import admin_answer_full_kb
-from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, content_type_label, normalize_content_type_value, publication_text
+from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, content_type_label, normalize_content_type_value, publication_text, user_answer_intro_text
 
 
 def _callback_data(markup):
@@ -104,3 +104,20 @@ def test_answer_prompt_contains_question_text_without_question_number():
     assert 'Тестовый вопрос про финансы' in text
     assert '#6' not in text
     assert '№6' not in text
+
+
+def test_user_answer_intro_contains_original_question_without_number():
+    ticket = {'id': 21}
+    messages = [{
+        'sender_type': 'user',
+        'text': 'акыда',
+        'content_type': 'text',
+        'file_id': None,
+    }]
+
+    text = user_answer_intro_text(ticket, messages)
+
+    assert 'Ответ на ваш вопрос' in text
+    assert 'акыда' in text
+    assert '#21' not in text
+    assert '№21' not in text

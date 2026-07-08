@@ -8,8 +8,8 @@ class FakeBot:
     def __init__(self):
         self.calls = []
 
-    async def send_message(self, chat_id, text):
-        self.calls.append(('message', chat_id, text))
+    async def send_message(self, chat_id, text, **kwargs):
+        self.calls.append(('message', chat_id, text, kwargs))
 
     async def send_voice(self, chat_id, file_id, caption=None):
         self.calls.append(('voice', chat_id, file_id, caption))
@@ -66,6 +66,7 @@ async def test_long_publication_sends_post_before_voice():
     await _send_publication_to_channel(callback.bot, _row('Длинный ответ. ' * 120), publication_channel='@channel')
 
     assert callback.bot.calls[0][0] == 'message'
+    assert callback.bot.calls[0][3]['disable_web_page_preview'] is True
     assert callback.bot.calls[-1][0] == 'voice'
     assert callback.bot.calls[-1][2] == 'voice_file_id'
 

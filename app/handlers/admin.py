@@ -38,6 +38,7 @@ from app.services import (
     split_telegram_text,
     ticket_card,
     ticket_history_text,
+    user_answer_intro_text,
 )
 from app.states import AdminAnswerState
 from app.utils import h, language_name, normalize_lang, status_name, t
@@ -179,7 +180,7 @@ async def _send_publication_to_channel(
             return
 
     for chunk in split_telegram_text(text):
-        await bot.send_message(publication_channel, chunk)
+        await bot.send_message(publication_channel, chunk, disable_web_page_preview=True)
     if file_id:
         await send_saved_media(caption=media_caption if content_type != 'sticker' else None)
 
@@ -462,7 +463,7 @@ async def admin_review_publication(
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     chunks = split_telegram_text(text)
     markup = admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=row.get('status') == 'answered')
-    await callback.message.edit_text(chunks[0], reply_markup=markup)
+    await callback.message.edit_text(chunks[0], reply_markup=markup, disable_web_page_preview=True)
     for index, chunk in enumerate(chunks[1:], start=2):
         await callback.message.answer(f'<b>Часть {index}/{len(chunks)}</b>\n\n{chunk}')
     await send_answer_media_preview(callback.bot, callback.message.chat.id, row)
@@ -517,6 +518,7 @@ async def admin_publish_answer(
     await callback.message.edit_text(
         chunks[0],
         reply_markup=admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=False),
+        disable_web_page_preview=True,
     )
     await callback.message.answer(f"✅ Вопрос №<b>{row['ticket_id']}</b> успешно опубликован в канал.")
     await callback.answer('Ответ опубликован.')
@@ -741,9 +743,10 @@ async def admin_send_answer(
     await db.set_status(ticket_id, 'answered')
     ticket = await db.get_ticket(ticket_id)
     await state.clear()
+    messages_for_user = await db.get_messages_with_senders(ticket_id, limit=30)
 
     try:
-        await message.bot.send_message(ticket['user_id'], t(ticket.get('language'), 'admin_answer_title', ticket_id=ticket_id))
+        await message.bot.send_message(ticket['user_id'], user_answer_intro_text(ticket, messages_for_user))
         await message.bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
         await message.bot.send_message(ticket['user_id'], t(ticket.get('language'), 'after_answer'))
     except Exception:

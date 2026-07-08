@@ -191,6 +191,20 @@ def answer_prompt_text(ticket: dict, messages: list[dict]) -> str:
     ]).strip()
 
 
+def user_answer_intro_text(ticket: dict, messages: list[dict]) -> str:
+    question = _first_user_message(messages)
+    question_body = _message_body(
+        question.get('text') if question else None,
+        question.get('content_type') if question else None,
+        question.get('file_id') if question else None,
+    )
+    return '\n'.join([
+        '💬 <b>Ответ на ваш вопрос:</b>',
+        '',
+        question_body,
+    ]).strip()
+
+
 def _plain_preview(value: str | None, limit: int = 120) -> str:
     text = (value or '').strip().replace('\n', ' ')
     if not text:
@@ -461,9 +475,10 @@ async def notify_admins_about_publication_ready(
                     answer_row['message_id'],
                     can_publish=answer_row.get('status') == 'answered',
                 ),
+                disable_web_page_preview=True,
             )
             for chunk in chunks[1:]:
-                await bot.send_message(admin_id, chunk)
+                await bot.send_message(admin_id, chunk, disable_web_page_preview=True)
             await send_answer_media_preview(bot, admin_id, answer_row)
         except Exception:
             continue
