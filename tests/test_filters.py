@@ -23,3 +23,9 @@ async def test_non_admin_filter_allows_regular_users():
 async def test_non_admin_filter_blocks_admins():
     filt = NonAdminFilter()
     assert await filt(DummyEvent(1), admin_ids={1, 2}) is False
+
+
+@pytest.mark.asyncio
+async def test_non_admin_filter_blocks_sheikhs():
+    filt = NonAdminFilter()
+    assert await filt(DummyEvent(3), admin_ids={1, 2}, sheikh_ids={3}) is False

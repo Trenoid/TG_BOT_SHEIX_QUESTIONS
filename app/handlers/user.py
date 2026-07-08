@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.database import Database
 from app.keyboards import admin_panel_kb, cancel_kb, categories_kb, language_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
-from app.services import message_content_type, message_file_id, message_text_preview, notify_admins_about_ticket, ticket_card
+from app.services import message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket
 from app.states import UserTicketState
 from app.utils import category_name, format_dt, language_name, normalize_lang, status_name, t
 
@@ -15,9 +15,10 @@ router = Router(name='user')
 
 
 class NonAdminFilter(BaseFilter):
-    async def __call__(self, event: TelegramObject, admin_ids: set[int]) -> bool:
+    async def __call__(self, event: TelegramObject, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> bool:
         user = getattr(event, 'from_user', None)
-        return bool(user and user.id not in admin_ids)
+        staff_ids = admin_ids | (sheikh_ids or set())
+        return bool(user and user.id not in staff_ids)
 
 
 # Важно: весь пользовательский роутер обрабатывает только обычных пользователей.
@@ -26,6 +27,10 @@ class NonAdminFilter(BaseFilter):
 # случайно перехватываются админской логикой.
 router.message.filter(NonAdminFilter())
 router.callback_query.filter(NonAdminFilter())
+
+
+def _staff_ids(admin_ids: set[int], sheikh_ids: set[int] | None = None) -> set[int]:
+    return admin_ids | (sheikh_ids or set())
 
 
 def _is_private(message: Message) -> bool:
@@ -61,9 +66,9 @@ def _tickets_summary(tickets: list[dict], lang: str) -> str:
 
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext, db: Database, admin_ids: set[int]) -> None:
+async def start(message: Message, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     await state.clear()
-    if message.from_user.id in admin_ids:
+    if message.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await message.answer(
             '<b>Панель шейха · Вопросы шейху</b> 🕌\n\n'
             'Вы вошли как шейх/администратор. Здесь будут вопросы пользователей.',
@@ -130,9 +135,9 @@ async def set_language(callback: CallbackQuery, db: Database, state: FSMContext)
 
 
 @router.callback_query(F.data == 'user:menu')
-async def user_menu(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int]) -> None:
+async def user_menu(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     await state.clear()
-    if callback.from_user.id in admin_ids:
+    if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await callback.message.edit_text(
             '<b>Панель шейха · Вопросы шейху</b> 🕌\n\n'
             'Вы вошли как шейх/администратор. Здесь будут вопросы пользователей.',
@@ -153,8 +158,8 @@ async def user_help(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data == 'user:new_ticket')
-async def new_ticket(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int]) -> None:
-    if callback.from_user.id in admin_ids:
+async def new_ticket(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
+    if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await state.clear()
         await callback.message.edit_text(
             'Вы вошли как <b>шейх/администратор</b>. Кнопка «Задать вопрос шейху» для вас скрыта.',
@@ -177,8 +182,8 @@ async def cancel(callback: CallbackQuery, state: FSMContext, db: Database) -> No
 
 
 @router.callback_query(F.data.startswith('user:category:'))
-async def choose_category(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int]) -> None:
-    if callback.from_user.id in admin_ids:
+async def choose_category(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
+    if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await state.clear()
         await callback.message.edit_text('Это действие доступно только обычному пользователю.', reply_markup=admin_panel_kb())
         await callback.answer()
@@ -195,7 +200,7 @@ async def choose_category(callback: CallbackQuery, state: FSMContext, db: Databa
 
 
 @router.message(UserTicketState.waiting_question)
-async def receive_question(message: Message, state: FSMContext, db: Database, admin_ids: set[int]) -> None:
+async def receive_question(message: Message, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     if not _is_private(message):
         return
     data = await state.get_data()
@@ -226,7 +231,7 @@ async def receive_question(message: Message, state: FSMContext, db: Database, ad
         t(lang, 'ticket_created', ticket_id=ticket_id),
         reply_markup=user_ticket_kb(ticket_id, 'open', lang),
     )
-    await notify_admins_about_ticket(message.bot, db, admin_ids, ticket_id, message)
+    await notify_staff_about_ticket(message.bot, db, admin_ids, sheikh_ids or set(), ticket_id, message)
 
 
 @router.callback_query(F.data == 'user:my_tickets')
@@ -248,10 +253,10 @@ async def view_my_ticket(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.message()
-async def fallback(message: Message, db: Database, admin_ids: set[int]) -> None:
+async def fallback(message: Message, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     if not _is_private(message):
         return
-    if message.from_user.id in admin_ids:
+    if message.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await message.answer(
             'Вы вошли как <b>шейх/администратор</b>. Откройте панель, чтобы видеть вопросы пользователей:',
             reply_markup=admin_panel_kb(),

@@ -51,11 +51,21 @@ def user_tickets_list_kb(tickets: list[dict], lang: str = 'ru') -> InlineKeyboar
 
 def admin_ticket_kb(ticket_id: int, status: str = 'open') -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text='✍️ Ответить', callback_data=f'admin:answer:{ticket_id}')]]
-    if status != 'closed':
-        rows.append([InlineKeyboardButton(text='✅ Закрыть', callback_data=f'admin:close:{ticket_id}')])
     rows.append([InlineKeyboardButton(text='📄 Карточка', callback_data=f'admin:view:{ticket_id}')])
     rows.append([InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')])
     rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_answer_sent_kb(ticket_id: int, answer_message_id: int, *, can_publish: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_publish:
+        rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
+    rows.extend([
+        [InlineKeyboardButton(text='📄 Карточка', callback_data=f'admin:view:{ticket_id}')],
+        [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
+        [InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')],
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -63,10 +73,24 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='🟢 Новые вопросы', callback_data='admin:list:open')],
         [InlineKeyboardButton(text='🟡 Отвеченные вопросы', callback_data='admin:list:answered')],
+        [InlineKeyboardButton(text='✅ Опубликованные ответы', callback_data='admin:list:published')],
         [InlineKeyboardButton(text='⚫ Закрытые вопросы', callback_data='admin:list:closed')],
         [InlineKeyboardButton(text='📜 История ответов', callback_data='admin:answers_history:0')],
         [InlineKeyboardButton(text='📊 Статистика', callback_data='admin:stats')],
         [InlineKeyboardButton(text='🌐 Язык панели', callback_data='admin:language')],
+    ])
+
+
+def sheikh_panel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='🟢 Неотвеченные вопросы', callback_data='sheikh:list:open')],
+        [InlineKeyboardButton(text='🟡 Отвеченные вопросы', callback_data='sheikh:list:answered')],
+    ])
+
+
+def sheikh_question_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='✍️ Ответить', callback_data=f'admin:answer:{ticket_id}')],
     ])
 
 
@@ -78,6 +102,40 @@ def admin_tickets_list_kb(tickets: list[dict], status: str) -> InlineKeyboardMar
             callback_data=f"admin:view:{ticket['id']}",
         )])
     rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def sheikh_tickets_list_kb(tickets: list[dict], status: str) -> InlineKeyboardMarkup:
+    rows = []
+    for ticket in tickets:
+        rows.append([InlineKeyboardButton(
+            text=f"#{ticket['id']} · {category_name(ticket.get('category'), 'ru')}",
+            callback_data=f"sheikh:view:{ticket['id']}",
+        )])
+    rows.append([InlineKeyboardButton(text='⬅️ Меню', callback_data='sheikh:panel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_publication_list_kb(answer_rows: list[dict], status: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in answer_rows:
+        action = 'Предпросмотр' if status == 'answered' else 'Открыть'
+        rows.append([InlineKeyboardButton(
+            text=f"{action}: вопрос #{row['ticket_id']} / ответ #{row['message_id']}",
+            callback_data=f"admin:review:{row['message_id']}",
+        )])
+    rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_publication_review_kb(ticket_id: int, answer_message_id: int, *, can_publish: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_publish:
+        rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
+    rows.extend([
+        [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
+        [InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')],
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

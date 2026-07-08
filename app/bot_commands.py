@@ -17,18 +17,25 @@ ADMIN_COMMANDS = [
     BotCommand(command='start', description='Панель шейха'),
     BotCommand(command='panel', description='Панель шейха'),
     BotCommand(command='answer', description='Ответить на вопрос'),
-    BotCommand(command='close', description='Закрыть вопрос'),
     BotCommand(command='language', description='Язык панели'),
     BotCommand(command='help', description='Помощь'),
     BotCommand(command='cancel', description='Отмена действия'),
 ]
 
+SHEIKH_COMMANDS = [
+    BotCommand(command='start', description='Вопросы шейху'),
+    BotCommand(command='panel', description='Меню вопросов'),
+    BotCommand(command='answer', description='Ответить на вопрос'),
+    BotCommand(command='help', description='Помощь'),
+    BotCommand(command='cancel', description='Отмена действия'),
+]
 
-async def setup_bot_commands(bot: Bot, admin_ids: set[int]) -> None:
+
+async def setup_bot_commands(bot: Bot, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     """Настраивает кнопку меню Telegram рядом с полем ввода.
 
     У обычных пользователей в меню будут /start, /new, /my, /language, /help.
-    У админов/шейхов будет отдельный набор команд панели.
+    У обычных админов будет расширенный набор команд, у шейха — короткий.
     """
     await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
     try:
@@ -42,3 +49,10 @@ async def setup_bot_commands(bot: Bot, admin_ids: set[int]) -> None:
             await bot.set_chat_menu_button(chat_id=admin_id, menu_button=MenuButtonCommands())
         except Exception as exc:  # pragma: no cover - админ мог ещё не открыть бота
             logging.warning('Could not set admin commands for %s: %s', admin_id, exc)
+
+    for sheikh_id in (sheikh_ids or set()) - admin_ids:
+        try:
+            await bot.set_my_commands(SHEIKH_COMMANDS, scope=BotCommandScopeChat(chat_id=sheikh_id))
+            await bot.set_chat_menu_button(chat_id=sheikh_id, menu_button=MenuButtonCommands())
+        except Exception as exc:  # pragma: no cover - шейх мог ещё не открыть бота
+            logging.warning('Could not set sheikh commands for %s: %s', sheikh_id, exc)

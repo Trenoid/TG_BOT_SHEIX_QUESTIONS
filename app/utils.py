@@ -19,6 +19,7 @@ LANGUAGES = {
 STATUS_NAMES_RU = {
     'open': '🟢 открыт',
     'answered': '🟡 отвечен',
+    'published': '✅ опубликован',
     'closed': '⚫ закрыт',
 }
 

@@ -113,3 +113,96 @@ async def test_get_admin_answer_returns_full_texts(tmp_path):
     assert full['question_text'] == long_question
     assert full['answer_text'] == long_answer
     assert full['admin_username'] == 'sheikh'
+
+
+@pytest.mark.asyncio
+async def test_sheikh_answers_move_from_publication_queue_to_published(tmp_path):
+    db = Database(str(tmp_path / 'support_bot.db'))
+    await db.init()
+
+    await db.upsert_user(user_id=300, username='asker300', full_name='Asker 300', language='ru')
+    await db.upsert_user(user_id=400, username='sheikh400', full_name='Sheikh Isa', language='ru')
+
+    ticket_id = await db.create_ticket(
+        user_id=300,
+        username='asker300',
+        full_name='Asker 300',
+        category='fiqh',
+        language='ru',
+    )
+    await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='user',
+        sender_id=300,
+        text='Можно ли вернуть товар?',
+        content_type='text',
+    )
+    first_answer_id = await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='sheikh',
+        sender_id=400,
+        text='Первый ответ.',
+        content_type='text',
+    )
+    latest_answer_id = await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='sheikh',
+        sender_id=400,
+        text='Последний ответ.',
+        content_type='text',
+    )
+    await db.set_status(ticket_id, 'answered')
+
+    assert first_answer_id != latest_answer_id
+    rows = await db.list_sheikh_answers_for_publication(status='answered')
+    assert len(rows) == 1
+    assert rows[0]['message_id'] == latest_answer_id
+    assert rows[0]['answer_text'] == 'Последний ответ.'
+    assert await db.count_sheikh_answers_for_publication(status='answered') == 1
+
+    await db.set_status(ticket_id, 'published')
+    assert await db.list_sheikh_answers_for_publication(status='answered') == []
+    published = await db.list_sheikh_answers_for_publication(status='published')
+    assert len(published) == 1
+    assert published[0]['message_id'] == latest_answer_id
+
+
+@pytest.mark.asyncio
+async def test_admin_answers_are_available_for_publication(tmp_path):
+    db = Database(str(tmp_path / 'support_bot.db'))
+    await db.init()
+
+    await db.upsert_user(user_id=301, username='asker301', full_name='Asker 301', language='ru')
+    await db.upsert_user(user_id=401, username='admin401', full_name='Admin 401', language='ru')
+
+    ticket_id = await db.create_ticket(
+        user_id=301,
+        username='asker301',
+        full_name='Asker 301',
+        category='fiqh',
+        language='ru',
+    )
+    await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='user',
+        sender_id=301,
+        text='Новый вопрос',
+        content_type='text',
+    )
+    answer_id = await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='admin',
+        sender_id=401,
+        text='Ответ администратора',
+        content_type='text',
+    )
+    await db.set_status(ticket_id, 'answered')
+
+    rows = await db.list_sheikh_answers_for_publication(status='answered')
+    assert len(rows) == 1
+    assert rows[0]['message_id'] == answer_id
+    assert rows[0]['answer_sender_type'] == 'admin'
+
+    row = await db.get_sheikh_answer_for_publication(answer_id)
+    assert row is not None
+    assert row['answer_text'] == 'Ответ администратора'

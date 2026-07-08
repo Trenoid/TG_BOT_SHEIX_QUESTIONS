@@ -33,12 +33,15 @@ async def main() -> None:
     # Прокидываем зависимости в хендлеры aiogram.
     dp['db'] = db
     dp['admin_ids'] = config.admin_ids
+    dp['sheikh_ids'] = config.sheikh_ids
+    dp['publication_channel'] = config.publication_channel
+    dp['russian_audio_url'] = config.russian_audio_url
 
     # Важно: admin router подключён первым, чтобы состояния админа срабатывали раньше user fallback.
     dp.include_router(admin.router)
     dp.include_router(user.router)
 
-    await setup_bot_commands(bot, config.admin_ids)
+    await setup_bot_commands(bot, config.admin_ids, config.sheikh_ids)
 
     logging.info('Bot started')
     await bot.delete_webhook(drop_pending_updates=True)

@@ -4,7 +4,7 @@ from aiogram import Bot
 from aiogram.types import Message
 
 from app.database import Database
-from app.keyboards import admin_ticket_kb
+from app.keyboards import admin_publication_review_kb, admin_ticket_kb, sheikh_question_kb
 from app.utils import category_name, format_dt, h, language_name, status_name, ticket_title, user_link
 
 
@@ -70,6 +70,8 @@ def sender_label(item: dict) -> str:
     sender_id = item.get('sender_id')
     if item.get('sender_type') == 'user':
         base = '👤 Пользователь'
+    elif item.get('sender_type') == 'sheikh':
+        base = '🕌 Шейх'
     else:
         base = '🕌 Шейх/админ'
     name = full_name or (f'@{username}' if username else str(sender_id or '—'))
@@ -127,6 +129,68 @@ def ticket_history_text(ticket: dict, messages: list[dict]) -> str:
     return '\n'.join(lines)
 
 
+def _first_user_message(messages: list[dict]) -> dict | None:
+    return next((item for item in messages if item.get('sender_type') == 'user'), None)
+
+
+def _latest_sheikh_answer(messages: list[dict]) -> dict | None:
+    return next((item for item in reversed(messages) if item.get('sender_type') == 'sheikh'), None)
+
+
+def sheikh_question_text(ticket: dict, messages: list[dict]) -> str:
+    question = _first_user_message(messages)
+    body = _message_body(
+        question.get('text') if question else None,
+        question.get('content_type') if question else None,
+        question.get('file_id') if question else None,
+    )
+    return '\n'.join([
+        f"❓ <b>Вопрос №{ticket['id']}</b>",
+        '',
+        body,
+    ]).strip()
+
+
+def sheikh_answered_text(ticket: dict, messages: list[dict]) -> str:
+    question = _first_user_message(messages)
+    answer = _latest_sheikh_answer(messages)
+    question_body = _message_body(
+        question.get('text') if question else None,
+        question.get('content_type') if question else None,
+        question.get('file_id') if question else None,
+    )
+    answer_body = _message_body(
+        answer.get('text') if answer else None,
+        answer.get('content_type') if answer else None,
+        answer.get('file_id') if answer else None,
+    )
+    return '\n'.join([
+        f"✅ <b>Вопрос №{ticket['id']} отвечен</b>",
+        '',
+        '<b>Вопрос:</b>',
+        question_body,
+        '',
+        '<b>Ответ:</b>',
+        answer_body,
+    ]).strip()
+
+
+def answer_prompt_text(ticket: dict, messages: list[dict]) -> str:
+    question = _first_user_message(messages)
+    question_body = _message_body(
+        question.get('text') if question else None,
+        question.get('content_type') if question else None,
+        question.get('file_id') if question else None,
+    )
+    return '\n'.join([
+        '✍️ <b>Напишите ответ для вопроса:</b>',
+        '',
+        question_body,
+        '',
+        'Можно отправить текст, фото, документ, видео или голосовое. Чтобы отменить: /cancel',
+    ]).strip()
+
+
 def _plain_preview(value: str | None, limit: int = 120) -> str:
     text = (value or '').strip().replace('\n', ' ')
     if not text:
@@ -163,6 +227,55 @@ def media_note(text: str | None, content_type: object | None, file_id: str | Non
 
 def _message_body(text: str | None, content_type: str | None, file_id: str | None = None) -> str:
     return media_note(text, content_type, file_id)
+
+
+def channel_public_url(publication_channel: int | str | None) -> str | None:
+    if publication_channel is None:
+        return None
+    if isinstance(publication_channel, int):
+        return None
+    value = publication_channel.strip()
+    if value.startswith('@') and len(value) > 1:
+        return f"https://t.me/{value[1:]}"
+    if value.startswith(('https://t.me/', 'http://t.me/', 't.me/')):
+        return value if value.startswith(('http://', 'https://')) else f'https://{value}'
+    return None
+
+
+def _publication_question_body(row: dict) -> str:
+    if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
+        return content_type_label(row.get('question_content_type'))
+    return h(str(row.get('question_text')).strip())
+
+
+def _publication_answer_body(row: dict) -> str:
+    if _is_placeholder_text(row.get('answer_text'), row.get('content_type')):
+        return content_type_label(row.get('content_type'))
+    return h(str(row.get('answer_text')).strip())
+
+
+def publication_text(row: dict, *, publication_channel: int | str | None = None, russian_audio_url: str | None = None) -> str:
+    """Text that is shown to admins and then posted to the channel."""
+    question = _publication_question_body(row)
+    answer = _publication_answer_body(row)
+    channel_url = channel_public_url(publication_channel)
+    channel_line = '✅ Ответы на вопросы'
+    if channel_url:
+        channel_line = f'✅ <a href="{h(channel_url)}">Ответы на вопросы</a>'
+
+    return '\n'.join([
+        '<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>',
+        '',
+        f"<b>ВОПРОС ❓ №{row['ticket_id']}:</b>",
+        question,
+        '',
+        '<b>ОТВЕТ✅:</b>',
+        answer,
+        '',
+        '[Орфография и пунктуация автора сохранены]',
+        '',
+        channel_line,
+    ]).strip()
 
 
 def admin_answers_history_text(rows: list[dict], *, page: int = 0, total_pages: int = 1, total: int | None = None) -> str:
@@ -266,7 +379,39 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
     return chunks
 
 
-async def notify_admins_about_ticket(bot: Bot, db: Database, admin_ids: set[int], ticket_id: int, user_message: Message) -> None:
+async def send_answer_media_preview(bot: Bot, chat_id: int, row: dict) -> bool:
+    file_id = row.get('answer_file_id')
+    if not file_id:
+        return False
+
+    content_type = normalize_content_type_value(row.get('content_type'))
+    caption = f"Оригинал ответа шейха по вопросу №{row['ticket_id']} · {content_type_label(content_type)}"
+    if content_type == 'voice':
+        await bot.send_voice(chat_id, file_id, caption=caption)
+    elif content_type == 'photo':
+        await bot.send_photo(chat_id, file_id, caption=caption)
+    elif content_type == 'video':
+        await bot.send_video(chat_id, file_id, caption=caption)
+    elif content_type == 'document':
+        await bot.send_document(chat_id, file_id, caption=caption)
+    elif content_type == 'audio':
+        await bot.send_audio(chat_id, file_id, caption=caption)
+    elif content_type == 'sticker':
+        await bot.send_sticker(chat_id, file_id)
+        await bot.send_message(chat_id, caption)
+    else:
+        await bot.send_message(chat_id, f'{caption}\n\n<code>{file_id}</code>')
+    return True
+
+
+async def notify_staff_about_ticket(
+    bot: Bot,
+    db: Database,
+    admin_ids: set[int],
+    sheikh_ids: set[int],
+    ticket_id: int,
+    user_message: Message,
+) -> None:
     ticket = await db.get_ticket(ticket_id)
     if not ticket:
         return
@@ -279,6 +424,47 @@ async def notify_admins_about_ticket(bot: Bot, db: Database, admin_ids: set[int]
                 reply_markup=admin_ticket_kb(ticket_id, ticket['status']),
             )
             await bot.copy_message(admin_id, user_message.chat.id, user_message.message_id)
+        except Exception:
+            continue
+
+    sheikh_text = '\n'.join([
+        f"❓ <b>Вопрос №{ticket_id}</b>",
+        '',
+        _message_body(message_text_preview(user_message), message_content_type(user_message), message_file_id(user_message)),
+    ]).strip()
+    for sheikh_id in sheikh_ids - admin_ids:
+        try:
+            await bot.send_message(sheikh_id, sheikh_text, reply_markup=sheikh_question_kb(ticket_id))
+            if message_file_id(user_message):
+                await bot.copy_message(sheikh_id, user_message.chat.id, user_message.message_id)
+        except Exception:
+            continue
+
+
+async def notify_admins_about_publication_ready(
+    bot: Bot,
+    admin_ids: set[int],
+    answer_row: dict,
+    *,
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+) -> None:
+    text = publication_text(answer_row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
+    chunks = split_telegram_text(text)
+    for admin_id in admin_ids:
+        try:
+            await bot.send_message(
+                admin_id,
+                chunks[0],
+                reply_markup=admin_publication_review_kb(
+                    answer_row['ticket_id'],
+                    answer_row['message_id'],
+                    can_publish=answer_row.get('status') == 'answered',
+                ),
+            )
+            for chunk in chunks[1:]:
+                await bot.send_message(admin_id, chunk)
+            await send_answer_media_preview(bot, admin_id, answer_row)
         except Exception:
             continue
 

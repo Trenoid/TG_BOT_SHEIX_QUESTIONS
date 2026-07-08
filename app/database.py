@@ -5,6 +5,53 @@ import aiosqlite
 from app.utils import DEFAULT_LANG, now_iso, normalize_lang
 
 
+ANSWER_CARD_SELECT = '''
+    SELECT
+        tm.id AS message_id,
+        tm.ticket_id,
+        tm.sender_type AS answer_sender_type,
+        tm.sender_id AS admin_id,
+        tm.text AS answer_text,
+        tm.content_type,
+        tm.file_id AS answer_file_id,
+        tm.created_at AS answered_at,
+        au.username AS admin_username,
+        au.full_name AS admin_full_name,
+        t.user_id,
+        t.username AS user_username,
+        t.full_name AS user_full_name,
+        t.category,
+        t.status,
+        t.language,
+        t.created_at AS question_created_at,
+        t.updated_at AS ticket_updated_at,
+        (
+            SELECT qm.text
+            FROM ticket_messages qm
+            WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
+            ORDER BY qm.id ASC
+            LIMIT 1
+        ) AS question_text,
+        (
+            SELECT qm.content_type
+            FROM ticket_messages qm
+            WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
+            ORDER BY qm.id ASC
+            LIMIT 1
+        ) AS question_content_type,
+        (
+            SELECT qm.file_id
+            FROM ticket_messages qm
+            WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
+            ORDER BY qm.id ASC
+            LIMIT 1
+        ) AS question_file_id
+    FROM ticket_messages tm
+    JOIN tickets t ON t.id = tm.ticket_id
+    LEFT JOIN users au ON au.user_id = tm.sender_id
+'''
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -127,10 +174,10 @@ class Database:
         text: str | None,
         content_type: str | None,
         file_id: str | None = None,
-    ) -> None:
+    ) -> int:
         ts = now_iso()
         async with aiosqlite.connect(self.path) as db:
-            await db.execute(
+            cursor = await db.execute(
                 '''
                 INSERT INTO ticket_messages(ticket_id, sender_type, sender_id, text, content_type, file_id, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -139,6 +186,7 @@ class Database:
             )
             await db.execute('UPDATE tickets SET updated_at = ? WHERE id = ?', (ts, ticket_id))
             await db.commit()
+            return int(cursor.lastrowid)
 
     async def get_ticket(self, ticket_id: int) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
@@ -172,6 +220,23 @@ class Database:
         query += ' ORDER BY updated_at DESC LIMIT ?'
         params.append(limit)
 
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def list_tickets_by_statuses(self, *, statuses: tuple[str, ...], limit: int = 10) -> list[dict]:
+        if not statuses:
+            return []
+        placeholders = ', '.join('?' for _ in statuses)
+        query = f'''
+            SELECT * FROM tickets
+            WHERE status IN ({placeholders})
+            ORDER BY updated_at DESC
+            LIMIT ?
+        '''
+        params: list[object] = [*statuses, limit]
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(query, params)
@@ -219,52 +284,10 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                '''
-                SELECT
-                    tm.id AS message_id,
-                    tm.ticket_id,
-                    tm.sender_id AS admin_id,
-                    tm.text AS answer_text,
-                    tm.content_type,
-                    tm.file_id AS answer_file_id,
-                    tm.created_at AS answered_at,
-                    au.username AS admin_username,
-                    au.full_name AS admin_full_name,
-                    t.user_id,
-                    t.username AS user_username,
-                    t.full_name AS user_full_name,
-                    t.category,
-                    t.status,
-                    t.language,
-                    t.created_at AS question_created_at,
-                    t.updated_at AS ticket_updated_at,
-                    (
-                        SELECT qm.text
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_text,
-                    (
-                        SELECT qm.content_type
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_content_type,
-                    (
-                        SELECT qm.file_id
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_file_id
-                FROM ticket_messages tm
-                JOIN tickets t ON t.id = tm.ticket_id
-                LEFT JOIN users au ON au.user_id = tm.sender_id
-                WHERE tm.sender_type = 'admin'
-                ORDER BY tm.id DESC
-                LIMIT ? OFFSET ?
+                ANSWER_CARD_SELECT + '''
+                    WHERE tm.sender_type IN ('admin', 'sheikh')
+                    ORDER BY tm.id DESC
+                    LIMIT ? OFFSET ?
                 ''',
                 (limit, offset),
             )
@@ -275,51 +298,9 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                '''
-                SELECT
-                    tm.id AS message_id,
-                    tm.ticket_id,
-                    tm.sender_id AS admin_id,
-                    tm.text AS answer_text,
-                    tm.content_type,
-                    tm.file_id AS answer_file_id,
-                    tm.created_at AS answered_at,
-                    au.username AS admin_username,
-                    au.full_name AS admin_full_name,
-                    t.user_id,
-                    t.username AS user_username,
-                    t.full_name AS user_full_name,
-                    t.category,
-                    t.status,
-                    t.language,
-                    t.created_at AS question_created_at,
-                    t.updated_at AS ticket_updated_at,
-                    (
-                        SELECT qm.text
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_text,
-                    (
-                        SELECT qm.content_type
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_content_type,
-                    (
-                        SELECT qm.file_id
-                        FROM ticket_messages qm
-                        WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
-                        ORDER BY qm.id ASC
-                        LIMIT 1
-                    ) AS question_file_id
-                FROM ticket_messages tm
-                JOIN tickets t ON t.id = tm.ticket_id
-                LEFT JOIN users au ON au.user_id = tm.sender_id
-                WHERE tm.sender_type = 'admin' AND tm.id = ?
-                LIMIT 1
+                ANSWER_CARD_SELECT + '''
+                    WHERE tm.sender_type IN ('admin', 'sheikh') AND tm.id = ?
+                    LIMIT 1
                 ''',
                 (message_id,),
             )
@@ -328,14 +309,67 @@ class Database:
 
     async def count_admin_answers(self) -> int:
         async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute("SELECT COUNT(*) FROM ticket_messages WHERE sender_type = 'admin'")
+            cursor = await db.execute("SELECT COUNT(*) FROM ticket_messages WHERE sender_type IN ('admin', 'sheikh')")
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
+
+    async def list_sheikh_answers_for_publication(self, *, status: str = 'answered', limit: int = 10, offset: int = 0) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                ANSWER_CARD_SELECT + '''
+                    WHERE tm.sender_type IN ('admin', 'sheikh')
+                      AND t.status = ?
+                      AND tm.id = (
+                          SELECT MAX(latest.id)
+                          FROM ticket_messages latest
+                          WHERE latest.ticket_id = t.id AND latest.sender_type IN ('admin', 'sheikh')
+                      )
+                    ORDER BY tm.id DESC
+                    LIMIT ? OFFSET ?
+                ''',
+                (status, limit, offset),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def count_sheikh_answers_for_publication(self, *, status: str = 'answered') -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                '''
+                SELECT COUNT(*)
+                FROM ticket_messages tm
+                JOIN tickets t ON t.id = tm.ticket_id
+                WHERE tm.sender_type IN ('admin', 'sheikh')
+                  AND t.status = ?
+                  AND tm.id = (
+                      SELECT MAX(latest.id)
+                      FROM ticket_messages latest
+                      WHERE latest.ticket_id = t.id AND latest.sender_type IN ('admin', 'sheikh')
+                  )
+                ''',
+                (status,),
+            )
+            row = await cursor.fetchone()
+            return int(row[0] if row else 0)
+
+    async def get_sheikh_answer_for_publication(self, message_id: int) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                ANSWER_CARD_SELECT + '''
+                    WHERE tm.sender_type IN ('admin', 'sheikh') AND tm.id = ?
+                    LIMIT 1
+                ''',
+                (message_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
     async def stats(self) -> dict[str, int]:
         async with aiosqlite.connect(self.path) as db:
             result: dict[str, int] = {}
-            for status in ('open', 'answered', 'closed'):
+            for status in ('open', 'answered', 'published', 'closed'):
                 cursor = await db.execute('SELECT COUNT(*) FROM tickets WHERE status = ?', (status,))
                 result[status] = int((await cursor.fetchone())[0])
             cursor = await db.execute('SELECT COUNT(*) FROM tickets')
