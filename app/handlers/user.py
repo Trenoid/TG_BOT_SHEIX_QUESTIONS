@@ -5,6 +5,7 @@ from aiogram.filters import BaseFilter, CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
+from app.bot_commands import set_user_commands_for_chat
 from app.database import Database
 from app.keyboards import admin_panel_kb, cancel_kb, categories_kb, language_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
 from app.services import is_text_question_content, message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket
@@ -40,6 +41,7 @@ def _is_private(message: Message) -> bool:
 async def _remember_user(message: Message, db: Database) -> str:
     user = message.from_user
     lang = await db.get_user_language(user.id)
+    await set_user_commands_for_chat(message.bot, user.id)
     await db.upsert_user(
         user_id=user.id,
         username=user.username,

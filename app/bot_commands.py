@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
 
 USER_COMMANDS = [
     BotCommand(command='start', description='Открыть меню'),
@@ -38,6 +38,7 @@ async def setup_bot_commands(bot: Bot, admin_ids: set[int], sheikh_ids: set[int]
     У обычных админов будет расширенный набор команд, у шейха — короткий.
     """
     await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+    await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeAllPrivateChats())
     try:
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except Exception as exc:  # pragma: no cover - зависит от Telegram API/прав бота
@@ -56,3 +57,12 @@ async def setup_bot_commands(bot: Bot, admin_ids: set[int], sheikh_ids: set[int]
             await bot.set_chat_menu_button(chat_id=sheikh_id, menu_button=MenuButtonCommands())
         except Exception as exc:  # pragma: no cover - шейх мог ещё не открыть бота
             logging.warning('Could not set sheikh commands for %s: %s', sheikh_id, exc)
+
+
+async def set_user_commands_for_chat(bot: Bot, user_id: int) -> None:
+    """Clears stale admin command menus for a regular user's private chat."""
+    try:
+        await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeChat(chat_id=user_id))
+        await bot.set_chat_menu_button(chat_id=user_id, menu_button=MenuButtonCommands())
+    except Exception as exc:  # pragma: no cover - пользователь мог не открыть бота/Telegram API временно недоступен
+        logging.warning('Could not set user commands for %s: %s', user_id, exc)
