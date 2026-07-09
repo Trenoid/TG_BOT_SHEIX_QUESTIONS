@@ -52,10 +52,32 @@ def test_publication_review_keyboard_has_publish_only_when_allowed():
     assert 'admin:publish:55' not in already_published
 
 
+def test_publication_review_keyboard_has_mark_button_when_manual_publication_needed():
+    callbacks = _callback_data(admin_publication_review_kb(
+        ticket_id=10,
+        answer_message_id=55,
+        can_publish=False,
+        can_mark_published=True,
+    ))
+    assert 'admin:publish:55' not in callbacks
+    assert 'admin:mark_published:55' in callbacks
+
+
 def test_admin_answer_sent_keyboard_has_publish_button():
     callbacks = _callback_data(admin_answer_sent_kb(ticket_id=16, answer_message_id=17))
     assert 'admin:publish:17' in callbacks
     assert 'admin:view:16' in callbacks
+
+
+def test_admin_answer_sent_keyboard_has_mark_button_when_manual_publication_needed():
+    callbacks = _callback_data(admin_answer_sent_kb(
+        ticket_id=16,
+        answer_message_id=17,
+        can_publish=False,
+        can_mark_published=True,
+    ))
+    assert 'admin:publish:17' not in callbacks
+    assert 'admin:mark_published:17' in callbacks
 
 
 def test_admin_answers_history_keyboard_has_pagination_buttons():

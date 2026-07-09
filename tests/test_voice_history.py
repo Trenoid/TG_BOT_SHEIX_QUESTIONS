@@ -2,7 +2,7 @@ import pytest
 
 from app.database import Database
 from app.keyboards import admin_answer_full_kb
-from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, content_type_label, is_text_question_content, normalize_content_type_value, publication_text, user_answer_intro_text
+from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, can_auto_publish_via_bot, can_publish_via_bot, content_type_label, is_allowed_question_content, normalize_content_type_value, publication_text, user_answer_intro_text
 
 
 def _callback_data(markup):
@@ -14,11 +14,47 @@ def test_content_type_normalizes_aiogram_enum_string():
     assert content_type_label('ContentType.VOICE') == '🎙 Голосовое сообщение'
 
 
-def test_user_questions_accept_only_plain_text():
-    assert is_text_question_content('text', 'Вопрос текстом') is True
-    assert is_text_question_content('voice', None) is False
-    assert is_text_question_content('photo', 'caption should not count') is False
-    assert is_text_question_content('text', '   ') is False
+def test_user_questions_accept_text_photo_and_video_with_text():
+    assert is_allowed_question_content('text', 'Вопрос текстом') is True
+    assert is_allowed_question_content('photo', 'Вопрос к фото') is True
+    assert is_allowed_question_content('video', 'Вопрос к видео') is True
+    assert is_allowed_question_content('voice', None) is False
+    assert is_allowed_question_content('document', 'caption should not count') is False
+    assert is_allowed_question_content('photo', '   ') is False
+
+
+def test_publication_rules_allow_only_text_question_and_text_or_voice_answer():
+    text_question_text_answer = {
+        'question_text': 'Вопрос',
+        'question_content_type': 'text',
+        'question_file_id': None,
+        'answer_text': 'Ответ',
+        'content_type': 'text',
+        'answer_file_id': None,
+    }
+    text_question_voice_answer = {
+        **text_question_text_answer,
+        'answer_text': None,
+        'content_type': 'voice',
+        'answer_file_id': 'voice_file_id',
+    }
+    photo_question_text_answer = {
+        **text_question_text_answer,
+        'question_content_type': 'photo',
+        'question_file_id': 'photo_file_id',
+    }
+    text_question_photo_answer = {
+        **text_question_text_answer,
+        'content_type': 'photo',
+        'answer_file_id': 'photo_file_id',
+    }
+
+    assert can_auto_publish_via_bot(text_question_text_answer) is True
+    assert can_publish_via_bot(text_question_text_answer) is True
+    assert can_auto_publish_via_bot(text_question_voice_answer) is False
+    assert can_publish_via_bot(text_question_voice_answer) is True
+    assert can_publish_via_bot(photo_question_text_answer) is False
+    assert can_publish_via_bot(text_question_photo_answer) is False
 
 
 @pytest.mark.asyncio

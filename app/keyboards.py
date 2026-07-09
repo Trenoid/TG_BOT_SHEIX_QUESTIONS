@@ -57,10 +57,18 @@ def admin_ticket_kb(ticket_id: int, status: str = 'open') -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_answer_sent_kb(ticket_id: int, answer_message_id: int, *, can_publish: bool = True) -> InlineKeyboardMarkup:
+def admin_answer_sent_kb(
+    ticket_id: int,
+    answer_message_id: int,
+    *,
+    can_publish: bool = True,
+    can_mark_published: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_publish:
         rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
+    if can_mark_published:
+        rows.append([InlineKeyboardButton(text='✅ Отметить как опубликованный', callback_data=f'admin:mark_published:{answer_message_id}')])
     rows.extend([
         [InlineKeyboardButton(text='📄 Карточка', callback_data=f'admin:view:{ticket_id}')],
         [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
@@ -128,10 +136,18 @@ def admin_publication_list_kb(answer_rows: list[dict], status: str) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_publication_review_kb(ticket_id: int, answer_message_id: int, *, can_publish: bool) -> InlineKeyboardMarkup:
+def admin_publication_review_kb(
+    ticket_id: int,
+    answer_message_id: int,
+    *,
+    can_publish: bool,
+    can_mark_published: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_publish:
         rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
+    if can_mark_published:
+        rows.append([InlineKeyboardButton(text='✅ Отметить как опубликованный', callback_data=f'admin:mark_published:{answer_message_id}')])
     rows.extend([
         [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
         [InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')],

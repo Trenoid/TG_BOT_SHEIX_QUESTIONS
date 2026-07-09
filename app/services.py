@@ -64,8 +64,39 @@ def message_file_id(message: Message) -> str | None:
     return None
 
 
-def is_text_question_content(content_type: object | None, text: str | None) -> bool:
-    return normalize_content_type_value(content_type) == 'text' and bool(text and text.strip())
+def is_allowed_question_content(content_type: object | None, text: str | None) -> bool:
+    ct = normalize_content_type_value(content_type)
+    if ct not in {'text', 'photo', 'video'}:
+        return False
+    return bool(text and text.strip())
+
+
+def is_question_text_only(row: dict) -> bool:
+    return (
+        normalize_content_type_value(row.get('question_content_type')) == 'text'
+        and not row.get('question_file_id')
+        and not _is_placeholder_text(row.get('question_text'), 'text')
+    )
+
+
+def is_answer_text_only(row: dict) -> bool:
+    return (
+        normalize_content_type_value(row.get('content_type')) == 'text'
+        and not row.get('answer_file_id')
+        and not _is_placeholder_text(row.get('answer_text'), 'text')
+    )
+
+
+def is_answer_voice(row: dict) -> bool:
+    return normalize_content_type_value(row.get('content_type')) == 'voice' and bool(row.get('answer_file_id'))
+
+
+def can_publish_via_bot(row: dict) -> bool:
+    return is_question_text_only(row) and (is_answer_text_only(row) or is_answer_voice(row))
+
+
+def can_auto_publish_via_bot(row: dict) -> bool:
+    return is_question_text_only(row) and is_answer_text_only(row)
 
 
 def sender_label(item: dict) -> str:
@@ -477,7 +508,8 @@ async def notify_admins_about_publication_ready(
                 reply_markup=admin_publication_review_kb(
                     answer_row['ticket_id'],
                     answer_row['message_id'],
-                    can_publish=answer_row.get('status') == 'answered',
+                    can_publish=answer_row.get('status') == 'answered' and can_publish_via_bot(answer_row),
+                    can_mark_published=answer_row.get('status') == 'answered' and not can_publish_via_bot(answer_row),
                 ),
                 disable_web_page_preview=True,
             )

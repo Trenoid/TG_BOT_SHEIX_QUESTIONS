@@ -24,6 +24,8 @@ from app.services import (
     admin_answer_full_text,
     admin_answers_history_text,
     answer_prompt_text,
+    can_auto_publish_via_bot,
+    can_publish_via_bot,
     content_type_label,
     message_content_type,
     message_file_id,
@@ -462,7 +464,13 @@ async def admin_review_publication(
 
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     chunks = split_telegram_text(text)
-    markup = admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=row.get('status') == 'answered')
+    can_publish = row.get('status') == 'answered' and can_publish_via_bot(row)
+    markup = admin_publication_review_kb(
+        row['ticket_id'],
+        row['message_id'],
+        can_publish=can_publish,
+        can_mark_published=row.get('status') == 'answered' and not can_publish,
+    )
     await callback.message.edit_text(chunks[0], reply_markup=markup, disable_web_page_preview=True)
     for index, chunk in enumerate(chunks[1:], start=2):
         await callback.message.answer(f'<b>Часть {index}/{len(chunks)}</b>\n\n{chunk}')
@@ -499,6 +507,9 @@ async def admin_publish_answer(
     if row.get('status') != 'answered':
         await callback.answer('Опубликовать можно только отвеченный и ещё не опубликованный вопрос.', show_alert=True)
         return
+    if not can_publish_via_bot(row):
+        await callback.answer('Этот ответ нужно опубликовать вручную, затем отметить как опубликованный.', show_alert=True)
+        return
 
     try:
         await _send_publication_to_channel(
@@ -522,6 +533,46 @@ async def admin_publish_answer(
     )
     await callback.message.answer(f"✅ Вопрос №<b>{row['ticket_id']}</b> успешно опубликован в канал.")
     await callback.answer('Ответ опубликован.')
+
+
+@router.callback_query(F.data.startswith('admin:mark_published:'), AdminFilter())
+async def admin_mark_answer_published(
+    callback: CallbackQuery,
+    db: Database,
+    admin_ids: set[int],
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    parts = callback.data.split(':')
+    if len(parts) < 3 or not parts[2].isdigit():
+        await callback.answer('Ответ не найден.', show_alert=True)
+        return
+    message_id = int(parts[2])
+    row = await db.get_sheikh_answer_for_publication(message_id)
+    if not row:
+        await callback.answer('Ответ не найден.', show_alert=True)
+        return
+    if row.get('status') == 'published':
+        await callback.answer('Этот ответ уже отмечен опубликованным.', show_alert=True)
+        return
+    if row.get('status') != 'answered':
+        await callback.answer('Отметить можно только отвеченный и ещё не опубликованный вопрос.', show_alert=True)
+        return
+
+    await db.set_status(row['ticket_id'], 'published')
+    row['status'] = 'published'
+    text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
+    chunks = split_telegram_text(text)
+    await callback.message.edit_text(
+        chunks[0],
+        reply_markup=admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=False, can_mark_published=False),
+        disable_web_page_preview=True,
+    )
+    await callback.message.answer(f"✅ Вопрос №<b>{row['ticket_id']}</b> отмечен как опубликованный.")
+    await callback.answer('Отмечено как опубликованное.')
 
 
 
@@ -768,7 +819,7 @@ async def admin_send_answer(
             except Exception:
                 pass
         row = await db.get_sheikh_answer_for_publication(answer_message_id)
-        if row and answer_content_type == 'text' and publication_channel is not None:
+        if row and publication_channel is not None and can_auto_publish_via_bot(row):
             try:
                 await _send_publication_to_channel(
                     message.bot,
@@ -799,9 +850,16 @@ async def admin_send_answer(
         else:
             await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>.', reply_markup=sheikh_panel_kb())
     else:
+        row = await db.get_sheikh_answer_for_publication(answer_message_id)
+        can_publish_answer = bool(row and can_publish_via_bot(row))
         await message.answer(
             f'✅ Ответ отправлен пользователю по вопросу <b>#{ticket_id}</b>.',
-            reply_markup=admin_answer_sent_kb(ticket_id, answer_message_id, can_publish=True),
+            reply_markup=admin_answer_sent_kb(
+                ticket_id,
+                answer_message_id,
+                can_publish=can_publish_answer,
+                can_mark_published=bool(row and not can_publish_answer),
+            ),
         )
         await notify_admins_status(
             message.bot,
