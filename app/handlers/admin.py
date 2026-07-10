@@ -3,7 +3,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, ReplyParameters, TelegramObject
 
 from app.database import Database
 from app.keyboards import (
@@ -31,8 +31,10 @@ from app.services import (
     message_file_id,
     message_text_preview,
     normalize_content_type_value,
+    publication_caption_parts,
     notify_admins_about_publication_ready,
     notify_admins_status,
+    publication_caption_text,
     publication_text,
     send_answer_media_preview,
     sheikh_answered_text,
@@ -47,6 +49,7 @@ from app.utils import h, language_name, normalize_lang, status_name, t
 
 router = Router(name='admin')
 MEDIA_CAPTION_LIMIT = 1024
+MEDIA_CAPTION_COMMENT_LIMIT = 800
 
 
 def is_admin(user_id: int | None, admin_ids: set[int]) -> bool:
@@ -161,30 +164,97 @@ async def _send_publication_to_channel(
     content_type = normalize_content_type_value(row.get('content_type'))
     media_caption = f"Ответ шейха по вопросу №{row['ticket_id']}"
 
-    async def send_saved_media(caption: str | None = None) -> None:
+    async def send_saved_media(caption: str | None = None):
         if content_type == 'voice':
-            await bot.send_voice(publication_channel, file_id, caption=caption)
+            return await bot.send_voice(publication_channel, file_id, caption=caption)
         elif content_type == 'audio':
-            await bot.send_audio(publication_channel, file_id, caption=caption)
+            return await bot.send_audio(publication_channel, file_id, caption=caption)
         elif content_type == 'photo':
-            await bot.send_photo(publication_channel, file_id, caption=caption)
+            return await bot.send_photo(publication_channel, file_id, caption=caption)
         elif content_type == 'video':
-            await bot.send_video(publication_channel, file_id, caption=caption)
+            return await bot.send_video(publication_channel, file_id, caption=caption)
         elif content_type == 'document':
-            await bot.send_document(publication_channel, file_id, caption=caption)
+            return await bot.send_document(publication_channel, file_id, caption=caption)
         elif content_type == 'sticker':
-            await bot.send_sticker(publication_channel, file_id)
+            return await bot.send_sticker(publication_channel, file_id)
+        return None
 
     if file_id:
         can_caption = content_type in {'voice', 'audio', 'photo', 'video', 'document'}
-        if can_caption and len(text) <= MEDIA_CAPTION_LIMIT:
-            await send_saved_media(caption=text)
+        if can_caption:
+            linked_chat_id = await _linked_discussion_chat_id(bot, publication_channel)
+            if linked_chat_id:
+                caption, question_remainder = publication_caption_parts(
+                    row,
+                    publication_channel=publication_channel,
+                    russian_audio_url=russian_audio_url,
+                    limit=MEDIA_CAPTION_COMMENT_LIMIT,
+                )
+            else:
+                caption = publication_caption_text(
+                    row,
+                    publication_channel=publication_channel,
+                    russian_audio_url=russian_audio_url,
+                    limit=MEDIA_CAPTION_LIMIT,
+                )
+                question_remainder = None
+            sent_message = await send_saved_media(caption=caption)
+            message_id = getattr(sent_message, 'message_id', None)
+            if linked_chat_id and question_remainder and message_id:
+                await _send_question_remainder_comment(
+                    bot,
+                    linked_chat_id=linked_chat_id,
+                    publication_channel=publication_channel,
+                    channel_message_id=message_id,
+                    ticket_id=row['ticket_id'],
+                    question_remainder=question_remainder,
+                )
             return
 
     for chunk in split_telegram_text(text):
         await bot.send_message(publication_channel, chunk, disable_web_page_preview=True)
     if file_id:
         await send_saved_media(caption=media_caption if content_type != 'sticker' else None)
+
+
+async def _linked_discussion_chat_id(bot, publication_channel: int | str) -> int | None:
+    try:
+        chat = await bot.get_chat(publication_channel)
+    except Exception:
+        return None
+    return getattr(chat, 'linked_chat_id', None)
+
+
+async def _send_question_remainder_comment(
+    bot,
+    *,
+    linked_chat_id: int,
+    publication_channel: int | str,
+    channel_message_id: int,
+    ticket_id: int,
+    question_remainder: str,
+) -> bool:
+    reply_parameters = ReplyParameters(
+        message_id=channel_message_id,
+        chat_id=publication_channel,
+        allow_sending_without_reply=True,
+    )
+    chunks = split_telegram_text(question_remainder, limit=3600)
+    try:
+        for index, chunk in enumerate(chunks, start=1):
+            prefix = f'Продолжение вопроса №{ticket_id}:'
+            if len(chunks) > 1:
+                prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
+            await bot.send_message(
+                linked_chat_id,
+                f'{prefix}\n\n{chunk}',
+                parse_mode=None,
+                disable_web_page_preview=True,
+                reply_parameters=reply_parameters,
+            )
+    except Exception:
+        return False
+    return True
 
 
 @router.message(CommandStart(), AdminFilter())

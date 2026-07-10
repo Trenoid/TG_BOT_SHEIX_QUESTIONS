@@ -2,7 +2,7 @@ import pytest
 
 from app.database import Database
 from app.keyboards import admin_answer_full_kb
-from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, can_auto_publish_via_bot, can_publish_via_bot, content_type_label, is_allowed_question_content, normalize_content_type_value, publication_text, user_answer_intro_text
+from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, can_auto_publish_via_bot, can_publish_via_bot, content_type_label, is_allowed_question_content, normalize_content_type_value, publication_caption_text, publication_text, user_answer_intro_text
 
 
 def _callback_data(markup):
@@ -130,6 +130,25 @@ def test_publication_voice_answer_has_clean_media_label():
     assert '🎙 Голосовое сообщение' in text
     assert 'Оригинал вложения доступен' not in text
     assert '<a href="https://t.me/test_channel_questions">Ответы Шейха</a>' in text
+
+
+def test_publication_caption_text_fits_telegram_caption_limit():
+    row = {
+        'ticket_id': 40,
+        'category': 'fiqh',
+        'question_text': 'Очень длинный вопрос ' * 200,
+        'question_content_type': 'text',
+        'question_file_id': None,
+        'answer_text': None,
+        'content_type': 'voice',
+        'answer_file_id': 'voice_file_id',
+    }
+
+    text = publication_caption_text(row, publication_channel='https://t.me/test_channel_questions', limit=1024)
+
+    assert len(text) <= 1024
+    assert '🎙 Голосовое сообщение' in text
+    assert 'Ответы Шейха' in text
 
 
 def test_answer_prompt_contains_question_text_without_question_number():

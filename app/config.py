@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,14 +18,14 @@ class Config:
     russian_audio_url: str | None
 
 
-def _parse_admin_ids(raw: str) -> set[int]:
+def _parse_admin_ids(raw: str, *, env_name: str = 'ADMIN_IDS') -> set[int]:
     ids: set[int] = set()
-    for item in raw.replace(';', ',').split(','):
+    for item in re.split(r'[,;\s]+', raw):
         value = item.strip()
         if not value:
             continue
         if not value.isdigit():
-            raise ValueError(f'ADMIN_IDS contains invalid Telegram ID: {value!r}')
+            raise ValueError(f'{env_name} contains invalid Telegram ID: {value!r}')
         ids.add(int(value))
     return ids
 
@@ -67,7 +68,7 @@ def load_config() -> Config:
     if not admin_ids:
         raise RuntimeError('ADMIN_IDS is empty. Put at least one Telegram numeric ID into .env')
 
-    sheikh_ids = _parse_admin_ids(sheikh_ids_raw)
+    sheikh_ids = _parse_admin_ids(sheikh_ids_raw, env_name='SHEIKH_IDS')
 
     Path(database_path).parent.mkdir(parents=True, exist_ok=True)
     return Config(

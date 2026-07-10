@@ -4,30 +4,51 @@ from app.handlers.admin import _send_publication_to_channel
 from app.services import send_answer_media_preview
 
 
+class FakeMessage:
+    def __init__(self, message_id):
+        self.message_id = message_id
+
+
+class FakeChat:
+    def __init__(self, linked_chat_id=None):
+        self.linked_chat_id = linked_chat_id
+
+
 class FakeBot:
-    def __init__(self):
+    def __init__(self, *, linked_chat_id=None):
         self.calls = []
+        self.linked_chat_id = linked_chat_id
+
+    async def get_chat(self, chat_id):
+        return FakeChat(self.linked_chat_id)
 
     async def send_message(self, chat_id, text, **kwargs):
         self.calls.append(('message', chat_id, text, kwargs))
+        return FakeMessage(len(self.calls))
 
     async def send_voice(self, chat_id, file_id, caption=None):
         self.calls.append(('voice', chat_id, file_id, caption))
+        return FakeMessage(len(self.calls))
 
     async def send_audio(self, chat_id, file_id, caption=None):
         self.calls.append(('audio', chat_id, file_id, caption))
+        return FakeMessage(len(self.calls))
 
     async def send_photo(self, chat_id, file_id, caption=None):
         self.calls.append(('photo', chat_id, file_id, caption))
+        return FakeMessage(len(self.calls))
 
     async def send_video(self, chat_id, file_id, caption=None):
         self.calls.append(('video', chat_id, file_id, caption))
+        return FakeMessage(len(self.calls))
 
     async def send_document(self, chat_id, file_id, caption=None):
         self.calls.append(('document', chat_id, file_id, caption))
+        return FakeMessage(len(self.calls))
 
     async def send_sticker(self, chat_id, file_id):
         self.calls.append(('sticker', chat_id, file_id))
+        return FakeMessage(len(self.calls))
 
 
 class FakeCallback:
@@ -35,11 +56,11 @@ class FakeCallback:
         self.bot = FakeBot()
 
 
-def _row(answer_text: str) -> dict:
+def _row(answer_text: str | None, *, question_text: str = 'Как правильно держать пост?') -> dict:
     return {
         'ticket_id': 5,
         'category': 'ibadah',
-        'question_text': 'Как правильно держать пост?',
+        'question_text': question_text,
         'question_content_type': 'text',
         'question_file_id': None,
         'answer_text': answer_text,
@@ -60,15 +81,43 @@ async def test_short_publication_is_sent_together_as_voice_caption():
 
 
 @pytest.mark.asyncio
-async def test_long_publication_sends_post_before_voice():
+async def test_long_voice_publication_is_sent_as_single_caption_message():
     callback = FakeCallback()
 
-    await _send_publication_to_channel(callback.bot, _row('Длинный ответ. ' * 120), publication_channel='@channel')
+    await _send_publication_to_channel(
+        callback.bot,
+        _row(None, question_text='Длинный вопрос. ' * 160),
+        publication_channel='@channel',
+    )
 
-    assert callback.bot.calls[0][0] == 'message'
-    assert callback.bot.calls[0][3]['disable_web_page_preview'] is True
-    assert callback.bot.calls[-1][0] == 'voice'
-    assert callback.bot.calls[-1][2] == 'voice_file_id'
+    assert len(callback.bot.calls) == 1
+    assert callback.bot.calls[0][0] == 'voice'
+    assert callback.bot.calls[0][2] == 'voice_file_id'
+    assert len(callback.bot.calls[0][3]) <= 1024
+    assert 'Ответы Шейха' in callback.bot.calls[0][3]
+
+
+@pytest.mark.asyncio
+async def test_long_voice_publication_moves_question_remainder_to_comments():
+    bot = FakeBot(linked_chat_id=-100777)
+    question = ('Длинный вопрос с подробностями. ' * 80) + 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА'
+
+    await _send_publication_to_channel(
+        bot,
+        _row(None, question_text=question),
+        publication_channel='@channel',
+    )
+
+    assert bot.calls[0][0] == 'voice'
+    assert len(bot.calls[0][3]) <= 800
+    assert 'Продолжение вопроса' in bot.calls[0][3]
+
+    comment = bot.calls[1]
+    assert comment[0] == 'message'
+    assert comment[1] == -100777
+    assert 'Продолжение вопроса №5' in comment[2]
+    assert 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА' in comment[2]
+    assert comment[3]['reply_parameters'].message_id == 1
 
 
 @pytest.mark.asyncio

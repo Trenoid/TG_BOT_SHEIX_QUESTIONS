@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Bot
 from aiogram.types import Message
 
 from app.database import Database
 from app.keyboards import admin_publication_review_kb, admin_ticket_kb, sheikh_question_kb
 from app.utils import category_name, format_dt, h, language_name, status_name, ticket_title, user_link
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_content_type_value(value: object | None) -> str:
@@ -258,6 +262,8 @@ CONTENT_TYPE_LABELS = {
     'message': '📩 Сообщение',
 }
 
+QUESTION_CONTINUATION_NOTE = '<i>Продолжение вопроса — в комментариях.</i>'
+
 
 def content_type_label(content_type: object | None) -> str:
     ct = normalize_content_type_value(content_type)
@@ -291,10 +297,21 @@ def channel_public_url(publication_channel: int | str | None) -> str | None:
     return None
 
 
-def _publication_question_body(row: dict) -> str:
+def _truncate_plain_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return '…'
+    return text[:limit - 1].rstrip() + '…'
+
+
+def _publication_question_body(row: dict, *, limit: int | None = None) -> str:
     if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
         return content_type_label(row.get('question_content_type'))
-    return h(str(row.get('question_text')).strip())
+    text = str(row.get('question_text')).strip()
+    if limit is not None:
+        text = _truncate_plain_text(text, limit)
+    return h(text)
 
 
 def _publication_answer_body(row: dict) -> str:
@@ -303,20 +320,31 @@ def _publication_answer_body(row: dict) -> str:
     return h(str(row.get('answer_text')).strip())
 
 
-def publication_text(row: dict, *, publication_channel: int | str | None = None, russian_audio_url: str | None = None) -> str:
+def publication_text(
+    row: dict,
+    *,
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+    question_limit: int | None = None,
+    question_continues_in_comments: bool = False,
+) -> str:
     """Text that is shown to admins and then posted to the channel."""
-    question = _publication_question_body(row)
+    question = _publication_question_body(row, limit=question_limit)
     answer = _publication_answer_body(row)
     channel_url = channel_public_url(publication_channel)
     channel_line = '✅ Ответы Шейха'
     if channel_url:
         channel_line = f'✅ <a href="{h(channel_url)}">Ответы Шейха</a>'
 
-    return '\n'.join([
+    lines = [
         '<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>',
         '',
         f"<b>ВОПРОС ❓ №{row['ticket_id']}:</b>",
         question,
+    ]
+    if question_continues_in_comments:
+        lines.extend(['', QUESTION_CONTINUATION_NOTE])
+    lines.extend([
         '',
         '<b>ОТВЕТ✅:</b>',
         answer,
@@ -324,7 +352,111 @@ def publication_text(row: dict, *, publication_channel: int | str | None = None,
         '[Орфография и пунктуация автора сохранены]',
         '',
         channel_line,
-    ]).strip()
+    ])
+    return '\n'.join(lines).strip()
+
+
+def _shown_question_chars(question_text: str, question_limit: int | None) -> int:
+    if question_limit is None or len(question_text) <= question_limit:
+        return len(question_text)
+    if question_limit <= 1:
+        return 0
+    return len(question_text[:question_limit - 1].rstrip())
+
+
+def _fit_publication_caption(
+    row: dict,
+    *,
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+    limit: int = 1024,
+    question_continues_in_comments: bool = False,
+) -> tuple[str, int | None]:
+    text = publication_text(
+        row,
+        publication_channel=publication_channel,
+        russian_audio_url=russian_audio_url,
+        question_continues_in_comments=question_continues_in_comments,
+    )
+    if len(text) <= limit:
+        return text, None
+
+    if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
+        return _truncate_plain_text(text, limit), None
+
+    question_text = str(row.get('question_text') or '').strip()
+    low = 0
+    high = len(question_text)
+    best_limit = 0
+    best = publication_text(
+        row,
+        publication_channel=publication_channel,
+        russian_audio_url=russian_audio_url,
+        question_limit=0,
+        question_continues_in_comments=question_continues_in_comments,
+    )
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = publication_text(
+            row,
+            publication_channel=publication_channel,
+            russian_audio_url=russian_audio_url,
+            question_limit=mid,
+            question_continues_in_comments=question_continues_in_comments,
+        )
+        if len(candidate) <= limit:
+            best = candidate
+            best_limit = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    if len(best) <= limit:
+        return best, _shown_question_chars(question_text, best_limit)
+    return _truncate_plain_text(best, limit), 0
+
+
+def publication_caption_text(
+    row: dict,
+    *,
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+    limit: int = 1024,
+) -> str:
+    caption, _ = _fit_publication_caption(
+        row,
+        publication_channel=publication_channel,
+        russian_audio_url=russian_audio_url,
+        limit=limit,
+    )
+    return caption
+
+
+def publication_caption_parts(
+    row: dict,
+    *,
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+    limit: int = 800,
+) -> tuple[str, str | None]:
+    """Return a safe media caption and the remainder of the question for comments."""
+    full = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
+    if len(full) <= limit:
+        return full, None
+    if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
+        return _truncate_plain_text(full, limit), None
+
+    caption, shown_chars = _fit_publication_caption(
+        row,
+        publication_channel=publication_channel,
+        russian_audio_url=russian_audio_url,
+        limit=limit,
+        question_continues_in_comments=True,
+    )
+    question_text = str(row.get('question_text') or '').strip()
+    if shown_chars is None or shown_chars >= len(question_text):
+        return caption, None
+    remainder = question_text[shown_chars:].lstrip()
+    return caption, remainder or None
 
 
 def admin_answers_history_text(rows: list[dict], *, page: int = 0, total_pages: int = 1, total: int | None = None) -> str:
@@ -474,6 +606,7 @@ async def notify_staff_about_ticket(
             )
             await bot.copy_message(admin_id, user_message.chat.id, user_message.message_id)
         except Exception:
+            logger.warning('Failed to notify admin %s about ticket %s', admin_id, ticket_id, exc_info=True)
             continue
 
     sheikh_text = '\n'.join([
@@ -487,6 +620,7 @@ async def notify_staff_about_ticket(
             if message_file_id(user_message):
                 await bot.copy_message(sheikh_id, user_message.chat.id, user_message.message_id)
         except Exception:
+            logger.warning('Failed to notify sheikh %s about ticket %s', sheikh_id, ticket_id, exc_info=True)
             continue
 
 
