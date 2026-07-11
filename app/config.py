@@ -52,7 +52,7 @@ def _normalize_publication_channel(raw: str | None) -> int | str | None:
 
 
 def load_config() -> Config:
-    load_dotenv()
+    load_dotenv(override=True)
 
     bot_token = os.getenv('BOT_TOKEN', '').strip()
     admin_ids_raw = os.getenv('ADMIN_IDS', '').strip()

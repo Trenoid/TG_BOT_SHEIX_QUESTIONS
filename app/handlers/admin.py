@@ -31,6 +31,7 @@ from app.services import (
     message_file_id,
     message_text_preview,
     normalize_content_type_value,
+    QUESTION_CONTINUATION_NEXT_MESSAGE_NOTE,
     publication_caption_parts,
     notify_admins_about_publication_ready,
     notify_admins_status,
@@ -201,7 +202,7 @@ async def _send_publication_to_channel(
             sent_message = await send_saved_media(caption=caption)
             message_id = getattr(sent_message, 'message_id', None)
             if linked_chat_id and question_remainder and message_id:
-                await _send_question_remainder_comment(
+                comment_sent = await _send_question_remainder_comment(
                     bot,
                     linked_chat_id=linked_chat_id,
                     publication_channel=publication_channel,
@@ -209,6 +210,26 @@ async def _send_publication_to_channel(
                     ticket_id=row['ticket_id'],
                     question_remainder=question_remainder,
                 )
+                if not comment_sent:
+                    fallback_caption, _ = publication_caption_parts(
+                        row,
+                        publication_channel=publication_channel,
+                        russian_audio_url=russian_audio_url,
+                        limit=MEDIA_CAPTION_COMMENT_LIMIT,
+                        question_continuation_note=QUESTION_CONTINUATION_NEXT_MESSAGE_NOTE,
+                    )
+                    await _edit_media_caption(
+                        bot,
+                        publication_channel=publication_channel,
+                        message_id=message_id,
+                        caption=fallback_caption,
+                    )
+                    await _send_question_remainder_to_channel(
+                        bot,
+                        publication_channel=publication_channel,
+                        ticket_id=row['ticket_id'],
+                        question_remainder=question_remainder,
+                    )
             return
 
     for chunk in split_telegram_text(text):
@@ -234,24 +255,78 @@ async def _send_question_remainder_comment(
     ticket_id: int,
     question_remainder: str,
 ) -> bool:
-    reply_parameters = ReplyParameters(
-        message_id=channel_message_id,
-        chat_id=publication_channel,
-        allow_sending_without_reply=True,
-    )
     chunks = split_telegram_text(question_remainder, limit=3600)
+    send_options = [
+        {
+            'reply_to_message_id': channel_message_id,
+            'allow_sending_without_reply': False,
+        },
+        {
+            'reply_parameters': ReplyParameters(
+                message_id=channel_message_id,
+                allow_sending_without_reply=False,
+            ),
+        },
+        {
+            'reply_parameters': ReplyParameters(
+                message_id=channel_message_id,
+                chat_id=publication_channel,
+                allow_sending_without_reply=False,
+            ),
+        },
+    ]
+    for options in send_options:
+        try:
+            for index, chunk in enumerate(chunks, start=1):
+                prefix = f'Продолжение вопроса №{ticket_id}:'
+                if len(chunks) > 1:
+                    prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
+                await bot.send_message(
+                    linked_chat_id,
+                    f'{prefix}\n\n{chunk}',
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                    **options,
+                )
+        except Exception:
+            continue
+        return True
+    return False
+
+
+async def _send_question_remainder_to_channel(
+    bot,
+    *,
+    publication_channel: int | str,
+    ticket_id: int,
+    question_remainder: str,
+) -> None:
+    chunks = split_telegram_text(question_remainder, limit=3600)
+    for index, chunk in enumerate(chunks, start=1):
+        prefix = f'Продолжение вопроса №{ticket_id}:'
+        if len(chunks) > 1:
+            prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
+        await bot.send_message(
+            publication_channel,
+            f'{prefix}\n\n{chunk}',
+            parse_mode=None,
+            disable_web_page_preview=True,
+        )
+
+
+async def _edit_media_caption(
+    bot,
+    *,
+    publication_channel: int | str,
+    message_id: int,
+    caption: str,
+) -> bool:
     try:
-        for index, chunk in enumerate(chunks, start=1):
-            prefix = f'Продолжение вопроса №{ticket_id}:'
-            if len(chunks) > 1:
-                prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
-            await bot.send_message(
-                linked_chat_id,
-                f'{prefix}\n\n{chunk}',
-                parse_mode=None,
-                disable_web_page_preview=True,
-                reply_parameters=reply_parameters,
-            )
+        await bot.edit_message_caption(
+            chat_id=publication_channel,
+            message_id=message_id,
+            caption=caption,
+        )
     except Exception:
         return False
     return True

@@ -263,6 +263,7 @@ CONTENT_TYPE_LABELS = {
 }
 
 QUESTION_CONTINUATION_NOTE = '<i>Продолжение вопроса — в комментариях.</i>'
+QUESTION_CONTINUATION_NEXT_MESSAGE_NOTE = '<i>Продолжение вопроса — следующим сообщением.</i>'
 
 
 def content_type_label(content_type: object | None) -> str:
@@ -327,6 +328,7 @@ def publication_text(
     russian_audio_url: str | None = None,
     question_limit: int | None = None,
     question_continues_in_comments: bool = False,
+    question_continuation_note: str | None = None,
 ) -> str:
     """Text that is shown to admins and then posted to the channel."""
     question = _publication_question_body(row, limit=question_limit)
@@ -342,8 +344,10 @@ def publication_text(
         f"<b>ВОПРОС ❓ №{row['ticket_id']}:</b>",
         question,
     ]
-    if question_continues_in_comments:
-        lines.extend(['', QUESTION_CONTINUATION_NOTE])
+    if question_continuation_note is None and question_continues_in_comments:
+        question_continuation_note = QUESTION_CONTINUATION_NOTE
+    if question_continuation_note:
+        lines.extend(['', question_continuation_note])
     lines.extend([
         '',
         '<b>ОТВЕТ✅:</b>',
@@ -371,12 +375,14 @@ def _fit_publication_caption(
     russian_audio_url: str | None = None,
     limit: int = 1024,
     question_continues_in_comments: bool = False,
+    question_continuation_note: str | None = None,
 ) -> tuple[str, int | None]:
     text = publication_text(
         row,
         publication_channel=publication_channel,
         russian_audio_url=russian_audio_url,
         question_continues_in_comments=question_continues_in_comments,
+        question_continuation_note=question_continuation_note,
     )
     if len(text) <= limit:
         return text, None
@@ -394,6 +400,7 @@ def _fit_publication_caption(
         russian_audio_url=russian_audio_url,
         question_limit=0,
         question_continues_in_comments=question_continues_in_comments,
+        question_continuation_note=question_continuation_note,
     )
     while low <= high:
         mid = (low + high) // 2
@@ -403,6 +410,7 @@ def _fit_publication_caption(
             russian_audio_url=russian_audio_url,
             question_limit=mid,
             question_continues_in_comments=question_continues_in_comments,
+            question_continuation_note=question_continuation_note,
         )
         if len(candidate) <= limit:
             best = candidate
@@ -437,6 +445,7 @@ def publication_caption_parts(
     publication_channel: int | str | None = None,
     russian_audio_url: str | None = None,
     limit: int = 800,
+    question_continuation_note: str = QUESTION_CONTINUATION_NOTE,
 ) -> tuple[str, str | None]:
     """Return a safe media caption and the remainder of the question for comments."""
     full = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
@@ -450,7 +459,7 @@ def publication_caption_parts(
         publication_channel=publication_channel,
         russian_audio_url=russian_audio_url,
         limit=limit,
-        question_continues_in_comments=True,
+        question_continuation_note=question_continuation_note,
     )
     question_text = str(row.get('question_text') or '').strip()
     if shown_chars is None or shown_chars >= len(question_text):
