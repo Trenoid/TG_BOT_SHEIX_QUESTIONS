@@ -339,7 +339,7 @@ def publication_text(
     if channel_url:
         channel_line = f'<b>Ссылка на канал:</b> <a href="{h(channel_url)}">Ответы Шейха</a>'
     question_bot_line = (
-        f'<b>Бот для вопросов:</b> '
+        f'<b>Задать вопрос:</b> '
         f'<a href="https://t.me/{QUESTION_BOT_USERNAME}">@{QUESTION_BOT_USERNAME}</a>'
     )
 

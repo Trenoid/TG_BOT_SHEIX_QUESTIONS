@@ -114,7 +114,7 @@ def test_publication_text_matches_channel_shape():
     assert 'Прослушать на русском' not in text
     assert 'https://t.me/answers_channel' in text
     assert '<b>Ссылка на канал:</b>' in text
-    assert '<b>Бот для вопросов:</b>' in text
+    assert '<b>Задать вопрос:</b>' in text
     assert '<a href="https://t.me/abdulmalik_khairov_bot">@abdulmalik_khairov_bot</a>' in text
 
 

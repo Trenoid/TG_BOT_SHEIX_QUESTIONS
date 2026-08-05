@@ -29,27 +29,27 @@ class FakeBot:
         self.calls.append(('message', chat_id, text, kwargs))
         return FakeMessage(len(self.calls))
 
-    async def edit_message_caption(self, chat_id, message_id, caption):
-        self.calls.append(('edit_caption', chat_id, message_id, caption))
+    async def edit_message_caption(self, chat_id, message_id, caption, **kwargs):
+        self.calls.append(('edit_caption', chat_id, message_id, caption, kwargs))
 
-    async def send_voice(self, chat_id, file_id, caption=None):
-        self.calls.append(('voice', chat_id, file_id, caption))
+    async def send_voice(self, chat_id, file_id, caption=None, **kwargs):
+        self.calls.append(('voice', chat_id, file_id, caption, kwargs))
         return FakeMessage(len(self.calls))
 
-    async def send_audio(self, chat_id, file_id, caption=None):
-        self.calls.append(('audio', chat_id, file_id, caption))
+    async def send_audio(self, chat_id, file_id, caption=None, **kwargs):
+        self.calls.append(('audio', chat_id, file_id, caption, kwargs))
         return FakeMessage(len(self.calls))
 
-    async def send_photo(self, chat_id, file_id, caption=None):
-        self.calls.append(('photo', chat_id, file_id, caption))
+    async def send_photo(self, chat_id, file_id, caption=None, **kwargs):
+        self.calls.append(('photo', chat_id, file_id, caption, kwargs))
         return FakeMessage(len(self.calls))
 
-    async def send_video(self, chat_id, file_id, caption=None):
-        self.calls.append(('video', chat_id, file_id, caption))
+    async def send_video(self, chat_id, file_id, caption=None, **kwargs):
+        self.calls.append(('video', chat_id, file_id, caption, kwargs))
         return FakeMessage(len(self.calls))
 
-    async def send_document(self, chat_id, file_id, caption=None):
-        self.calls.append(('document', chat_id, file_id, caption))
+    async def send_document(self, chat_id, file_id, caption=None, **kwargs):
+        self.calls.append(('document', chat_id, file_id, caption, kwargs))
         return FakeMessage(len(self.calls))
 
     async def send_sticker(self, chat_id, file_id):
@@ -100,7 +100,8 @@ async def test_each_caption_media_answer_is_published_immediately(content_type):
     assert bot.calls[0][0] == content_type
     assert bot.calls[0][2] == f'{content_type}_file_id'
     assert '<b>Ссылка на канал:</b>' in bot.calls[0][3]
-    assert '<b>Бот для вопросов:</b>' in bot.calls[0][3]
+    assert '<b>Задать вопрос:</b>' in bot.calls[0][3]
+    assert bot.calls[0][4]['parse_mode'] == 'HTML'
 
 
 @pytest.mark.asyncio
@@ -116,6 +117,7 @@ async def test_text_answer_is_published_as_channel_post():
     assert bot.calls[0][0] == 'message'
     assert 'Текстовый ответ' in bot.calls[0][2]
     assert bot.calls[0][3]['disable_web_page_preview'] is True
+    assert bot.calls[0][3]['parse_mode'] == 'HTML'
 
 
 @pytest.mark.asyncio

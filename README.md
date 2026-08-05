@@ -141,10 +141,10 @@ SHEIKH_IDS=111111111,222222222
 [Орфография и пунктуация автора сохранены]
 
 Ссылка на канал: Ответы Шейха
-Бот для вопросов: @abdulmalik_khairov_bot
+Задать вопрос: @abdulmalik_khairov_bot
 ```
 
-Текст «Ответы Шейха» содержит ссылку на канал из `PUBLICATION_CHANNEL`, а username бота в следующей строке ведёт в `@abdulmalik_khairov_bot`.
+Текст «Ответы Шейха» содержит ссылку на канал из `PUBLICATION_CHANNEL`, а username бота в строке «Задать вопрос» ведёт в `@abdulmalik_khairov_bot`.
 
 ## Запуск
 

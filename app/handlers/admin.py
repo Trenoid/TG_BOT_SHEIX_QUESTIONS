@@ -167,15 +167,15 @@ async def _send_publication_to_channel(
 
     async def send_saved_media(caption: str | None = None):
         if content_type == 'voice':
-            return await bot.send_voice(publication_channel, file_id, caption=caption)
+            return await bot.send_voice(publication_channel, file_id, caption=caption, parse_mode='HTML')
         elif content_type == 'audio':
-            return await bot.send_audio(publication_channel, file_id, caption=caption)
+            return await bot.send_audio(publication_channel, file_id, caption=caption, parse_mode='HTML')
         elif content_type == 'photo':
-            return await bot.send_photo(publication_channel, file_id, caption=caption)
+            return await bot.send_photo(publication_channel, file_id, caption=caption, parse_mode='HTML')
         elif content_type == 'video':
-            return await bot.send_video(publication_channel, file_id, caption=caption)
+            return await bot.send_video(publication_channel, file_id, caption=caption, parse_mode='HTML')
         elif content_type == 'document':
-            return await bot.send_document(publication_channel, file_id, caption=caption)
+            return await bot.send_document(publication_channel, file_id, caption=caption, parse_mode='HTML')
         elif content_type == 'sticker':
             return await bot.send_sticker(publication_channel, file_id)
         return None
@@ -233,7 +233,7 @@ async def _send_publication_to_channel(
             return
 
     for chunk in split_telegram_text(text):
-        await bot.send_message(publication_channel, chunk, disable_web_page_preview=True)
+        await bot.send_message(publication_channel, chunk, parse_mode='HTML', disable_web_page_preview=True)
     if file_id:
         await send_saved_media(caption=media_caption if content_type != 'sticker' else None)
 
@@ -326,6 +326,7 @@ async def _edit_media_caption(
             chat_id=publication_channel,
             message_id=message_id,
             caption=caption,
+            parse_mode='HTML',
         )
     except Exception:
         return False
