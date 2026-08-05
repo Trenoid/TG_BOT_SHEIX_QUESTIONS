@@ -112,6 +112,7 @@ def test_publication_text_matches_channel_shape():
     assert 'ВОПРОС ❓ №723' in text
     assert 'ОТВЕТ✅:' in text
     assert 'Прослушать на русском' not in text
+    assert 'Орфография и пунктуация автора сохранены' not in text
     assert 'https://t.me/answers_channel' in text
     assert '<b>Ссылка на канал:</b>' in text
     assert '<b>Задать вопрос:</b>' in text

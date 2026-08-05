@@ -358,8 +358,6 @@ def publication_text(
         '<b>ОТВЕТ✅:</b>',
         answer,
         '',
-        '[Орфография и пунктуация автора сохранены]',
-        '',
         channel_line,
         question_bot_line,
     ])
