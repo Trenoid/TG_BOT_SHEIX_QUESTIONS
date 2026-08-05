@@ -335,12 +335,12 @@ def publication_text(
     question = _publication_question_body(row, limit=question_limit)
     answer = _publication_answer_body(row)
     channel_url = channel_public_url(publication_channel)
-    channel_line = 'Ссылка на канал: Ответы Шейха'
+    channel_line = '<b>Ссылка на канал:</b> Ответы Шейха'
     if channel_url:
-        channel_line = f'Ссылка на канал: <a href="{h(channel_url)}">Ответы Шейха</a>'
+        channel_line = f'<b>Ссылка на канал:</b> <a href="{h(channel_url)}">Ответы Шейха</a>'
     question_bot_line = (
-        f'<b>Бот для вопросов: @</b>'
-        f'<a href="https://t.me/{QUESTION_BOT_USERNAME}">{QUESTION_BOT_USERNAME}</a>'
+        f'<b>Бот для вопросов:</b> '
+        f'<a href="https://t.me/{QUESTION_BOT_USERNAME}">@{QUESTION_BOT_USERNAME}</a>'
     )
 
     lines = [

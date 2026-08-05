@@ -99,8 +99,8 @@ async def test_each_caption_media_answer_is_published_immediately(content_type):
     assert len(bot.calls) == 1
     assert bot.calls[0][0] == content_type
     assert bot.calls[0][2] == f'{content_type}_file_id'
-    assert 'Ссылка на канал:' in bot.calls[0][3]
-    assert 'Бот для вопросов: @' in bot.calls[0][3]
+    assert '<b>Ссылка на канал:</b>' in bot.calls[0][3]
+    assert '<b>Бот для вопросов:</b>' in bot.calls[0][3]
 
 
 @pytest.mark.asyncio

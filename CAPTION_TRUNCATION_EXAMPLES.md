@@ -39,8 +39,8 @@ Caption, который уйдет вместе с голосовым:
 
 [Орфография и пунктуация автора сохранены]
 
-Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
-<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
+<b>Ссылка на канал:</b> <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов:</b> <a href="https://t.me/abdulmalik_khairov_bot">@abdulmalik_khairov_bot</a>
 ```
 
 Длина caption: 376 символов. Комментарий не нужен.
@@ -66,8 +66,8 @@ Caption:
 
 [Орфография и пунктуация автора сохранены]
 
-Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
-<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
+<b>Ссылка на канал:</b> <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов:</b> <a href="https://t.me/abdulmalik_khairov_bot">@abdulmalik_khairov_bot</a>
 ```
 
 Длина caption: 486 символов. Комментарий не нужен.
@@ -91,8 +91,8 @@ Caption:
 
 [Орфография и пунктуация автора сохранены]
 
-Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
-<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
+<b>Ссылка на канал:</b> <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов:</b> <a href="https://t.me/abdulmalik_khairov_bot">@abdulmalik_khairov_bot</a>
 ```
 
 Длина caption: 800 символов.
