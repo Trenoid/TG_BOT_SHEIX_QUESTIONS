@@ -947,7 +947,6 @@ async def admin_send_answer(
         await message.bot.send_message(ticket['user_id'], t(ticket.get('language'), 'after_answer'))
     except Exception:
         await message.answer('Ответ сохранён, но не удалось отправить его пользователю. Возможно, пользователь заблокировал бота.', reply_markup=panel_markup)
-        return
 
     if sheikh_role:
         source_chat_id = data.get('source_chat_id')
@@ -973,7 +972,7 @@ async def admin_send_answer(
                     russian_audio_url=russian_audio_url,
                 )
                 await db.set_status(ticket_id, 'published')
-                await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>. Текстовый ответ опубликован в канал.', reply_markup=sheikh_panel_kb())
+                await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>. Ответ опубликован в канал.', reply_markup=sheikh_panel_kb())
             except Exception:
                 await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>. Не удалось автоматически опубликовать ответ в канал, отправил его администратору.', reply_markup=sheikh_panel_kb())
                 await notify_admins_about_publication_ready(

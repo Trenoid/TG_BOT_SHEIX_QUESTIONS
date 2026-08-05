@@ -87,6 +87,38 @@ async def test_short_publication_is_sent_together_as_voice_caption():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('content_type', ['audio', 'photo', 'video', 'document'])
+async def test_each_caption_media_answer_is_published_immediately(content_type):
+    bot = FakeBot()
+    row = _row(None)
+    row['content_type'] = content_type
+    row['answer_file_id'] = f'{content_type}_file_id'
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == content_type
+    assert bot.calls[0][2] == f'{content_type}_file_id'
+    assert 'Ссылка на канал:' in bot.calls[0][3]
+    assert 'Бот для вопросов: @' in bot.calls[0][3]
+
+
+@pytest.mark.asyncio
+async def test_text_answer_is_published_as_channel_post():
+    bot = FakeBot()
+    row = _row('Текстовый ответ')
+    row['content_type'] = 'text'
+    row['answer_file_id'] = None
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == 'message'
+    assert 'Текстовый ответ' in bot.calls[0][2]
+    assert bot.calls[0][3]['disable_web_page_preview'] is True
+
+
+@pytest.mark.asyncio
 async def test_long_voice_publication_is_sent_as_single_caption_message():
     callback = FakeCallback()
 

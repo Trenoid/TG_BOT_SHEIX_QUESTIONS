@@ -10,6 +10,7 @@ from app.keyboards import admin_publication_review_kb, admin_ticket_kb, sheikh_q
 from app.utils import category_name, format_dt, h, language_name, status_name, ticket_title, user_link
 
 logger = logging.getLogger(__name__)
+QUESTION_BOT_USERNAME = 'abdulmalik_khairov_bot'
 
 
 def normalize_content_type_value(value: object | None) -> str:
@@ -100,7 +101,7 @@ def can_publish_via_bot(row: dict) -> bool:
 
 
 def can_auto_publish_via_bot(row: dict) -> bool:
-    return is_question_text_only(row) and is_answer_text_only(row)
+    return bool(row.get('content_type') or row.get('answer_text') or row.get('answer_file_id'))
 
 
 def sender_label(item: dict) -> str:
@@ -334,9 +335,13 @@ def publication_text(
     question = _publication_question_body(row, limit=question_limit)
     answer = _publication_answer_body(row)
     channel_url = channel_public_url(publication_channel)
-    channel_line = '✅ Ответы Шейха'
+    channel_line = 'Ссылка на канал: Ответы Шейха'
     if channel_url:
-        channel_line = f'✅ <a href="{h(channel_url)}">Ответы Шейха</a>'
+        channel_line = f'Ссылка на канал: <a href="{h(channel_url)}">Ответы Шейха</a>'
+    question_bot_line = (
+        f'<b>Бот для вопросов: @</b>'
+        f'<a href="https://t.me/{QUESTION_BOT_USERNAME}">{QUESTION_BOT_USERNAME}</a>'
+    )
 
     lines = [
         '<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>',
@@ -356,6 +361,7 @@ def publication_text(
         '[Орфография и пунктуация автора сохранены]',
         '',
         channel_line,
+        question_bot_line,
     ])
     return '\n'.join(lines).strip()
 

@@ -51,8 +51,10 @@ def test_publication_rules_allow_only_text_question_and_text_or_voice_answer():
 
     assert can_auto_publish_via_bot(text_question_text_answer) is True
     assert can_publish_via_bot(text_question_text_answer) is True
-    assert can_auto_publish_via_bot(text_question_voice_answer) is False
+    assert can_auto_publish_via_bot(text_question_voice_answer) is True
     assert can_publish_via_bot(text_question_voice_answer) is True
+    assert can_auto_publish_via_bot(photo_question_text_answer) is True
+    assert can_auto_publish_via_bot(text_question_photo_answer) is True
     assert can_publish_via_bot(photo_question_text_answer) is False
     assert can_publish_via_bot(text_question_photo_answer) is False
 
@@ -111,6 +113,9 @@ def test_publication_text_matches_channel_shape():
     assert 'ОТВЕТ✅:' in text
     assert 'Прослушать на русском' not in text
     assert 'https://t.me/answers_channel' in text
+    assert 'Ссылка на канал:' in text
+    assert '<b>Бот для вопросов: @</b>' in text
+    assert '<a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>' in text
 
 
 def test_publication_voice_answer_has_clean_media_label():
@@ -129,7 +134,7 @@ def test_publication_voice_answer_has_clean_media_label():
 
     assert '🎙 Голосовое сообщение' in text
     assert 'Оригинал вложения доступен' not in text
-    assert '<a href="https://t.me/test_channel_questions">Ответы Шейха</a>' in text
+    assert 'Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>' in text
 
 
 def test_publication_caption_text_fits_telegram_caption_limit():

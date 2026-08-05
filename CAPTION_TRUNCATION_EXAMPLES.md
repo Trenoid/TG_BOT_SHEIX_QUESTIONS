@@ -16,7 +16,7 @@
 - номер вопроса;
 - блок `ОТВЕТ✅`;
 - строка `[Орфография и пунктуация автора сохранены]`;
-- ссылка `Ответы Шейха`.
+- строки со ссылками `Ссылка на канал: Ответы Шейха` и `Бот для вопросов: @abdulmalik_khairov_bot`.
 
 ## Пример 1: короткий вопрос, сокращения нет
 
@@ -39,10 +39,11 @@ Caption, который уйдет вместе с голосовым:
 
 [Орфография и пунктуация автора сохранены]
 
-✅ <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
 ```
 
-Длина caption: 262 символа. Комментарий не нужен.
+Длина caption: 376 символов. Комментарий не нужен.
 
 ## Пример 2: средний вопрос, сокращения нет
 
@@ -65,10 +66,11 @@ Caption:
 
 [Орфография и пунктуация автора сохранены]
 
-✅ <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
 ```
 
-Длина caption: 372 символа. Комментарий не нужен.
+Длина caption: 486 символов. Комментарий не нужен.
 
 ## Пример 3: длинный вопрос, остаток уходит в комментарии
 
@@ -89,7 +91,8 @@ Caption:
 
 [Орфография и пунктуация автора сохранены]
 
-✅ <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+Ссылка на канал: <a href="https://t.me/test_channel_questions">Ответы Шейха</a>
+<b>Бот для вопросов: @</b><a href="https://t.me/abdulmalik_khairov_bot">abdulmalik_khairov_bot</a>
 ```
 
 Длина caption: 800 символов.
