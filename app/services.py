@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import Bot
 from aiogram.types import Message
 
 from app.database import Database
 from app.keyboards import admin_publication_review_kb, admin_ticket_kb, sheikh_question_kb
-from app.utils import category_name, format_dt, h, language_name, status_name, ticket_title, user_link
+from app.utils import category_name, format_dt, h, language_name, question_language_name, status_name, ticket_title, user_link
 
 logger = logging.getLogger(__name__)
 QUESTION_BOT_USERNAME = 'abdulmalik_khairov_bot'
+INGUSH_MARKERS = ('Ӏ', 'ӏ')
+STRONG_RUSSIAN_LANGUAGE_MARKERS = {
+    'что', 'как', 'почему', 'можно', 'нельзя', 'если', 'или', 'когда',
+    'где', 'какой', 'какая', 'какие', 'это', 'мне', 'мой', 'моя', 'нужно',
+    'правильно', 'вопрос', 'хочу', 'будет',
+}
+WEAK_RUSSIAN_LANGUAGE_MARKERS = {'ли', 'на', 'для', 'про'}
 
 
 def normalize_content_type_value(value: object | None) -> str:
@@ -76,6 +84,26 @@ def is_allowed_question_content(content_type: object | None, text: str | None) -
     return bool(text and text.strip())
 
 
+def question_matches_selected_language(text: str | None, question_language: str) -> bool:
+    """Conservative, non-AI language check; ambiguous short text is accepted."""
+    value = (text or '').strip().lower()
+    if not value:
+        return False
+    if not re.search(r'[а-яёӀӏ]', value):
+        return False
+    has_ingush_marker = any(marker in value for marker in INGUSH_MARKERS)
+    words = set(re.findall(r'[а-яё]+', value))
+    has_strong_russian_marker = bool(words & STRONG_RUSSIAN_LANGUAGE_MARKERS)
+    weak_russian_score = len(words & WEAK_RUSSIAN_LANGUAGE_MARKERS)
+    if question_language == 'ru':
+        return not has_ingush_marker or has_strong_russian_marker or weak_russian_score >= 2
+    if question_language != 'inh' or has_ingush_marker:
+        return True
+    if has_strong_russian_marker:
+        return False
+    return weak_russian_score < 2
+
+
 def is_question_text_only(row: dict) -> bool:
     return (
         normalize_content_type_value(row.get('question_content_type')) == 'text'
@@ -97,7 +125,19 @@ def is_answer_voice(row: dict) -> bool:
 
 
 def can_publish_via_bot(row: dict) -> bool:
-    return is_question_text_only(row) and (is_answer_text_only(row) or is_answer_voice(row))
+    question_type = normalize_content_type_value(row.get('question_content_type'))
+    question_has_text = not _is_placeholder_text(row.get('question_text'), question_type)
+    question_supported = is_question_text_only(row) or (
+        question_type in {'photo', 'video'}
+        and bool(row.get('question_file_id'))
+        and question_has_text
+    )
+    answer_type = normalize_content_type_value(row.get('content_type'))
+    answer_supported = is_answer_text_only(row) or (
+        answer_type in {'voice', 'audio', 'photo', 'video', 'document'}
+        and bool(row.get('answer_file_id'))
+    )
+    return question_supported and answer_supported
 
 
 def can_auto_publish_via_bot(row: dict) -> bool:
@@ -128,7 +168,8 @@ def ticket_card(ticket: dict, last_messages: list[dict] | None = None) -> str:
         f"👤 Пользователь: {user_link(ticket['user_id'], ticket.get('full_name'))}",
         f"🆔 User ID: <code>{ticket['user_id']}</code>",
         f"🔗 Username: {username_line}",
-        f"🌐 Язык: {language_name(lang)}",
+        f"🌐 Язык интерфейса: {language_name(lang)}",
+        f"🗣 Язык вопроса: {question_language_name(ticket.get('question_language'))}",
         f"🏷 Тема: {category_name(ticket.get('category'), 'ru')}",
         f"📌 Статус: {status_name(ticket.get('status', 'open'))}",
         f"🕒 Создано: {format_dt(ticket.get('created_at'))}",
@@ -149,7 +190,8 @@ def ticket_history_text(ticket: dict, messages: list[dict]) -> str:
         '',
         f"👤 Кем задан: {user_link(ticket['user_id'], ticket.get('full_name'))}",
         f"🔗 Username: @{h(ticket['username'])}" if ticket.get('username') else '🔗 Username: —',
-        f"🌐 Язык: {language_name(ticket.get('language'))}",
+        f"🌐 Язык интерфейса: {language_name(ticket.get('language'))}",
+        f"🗣 Язык вопроса: {question_language_name(ticket.get('question_language'))}",
         f"🏷 Тема: {category_name(ticket.get('category'), 'ru')}",
         f"📌 Статус: {status_name(ticket.get('status', 'open'))}",
         f"🕒 Вопрос создан: {format_dt(ticket.get('created_at'))}",
@@ -527,7 +569,8 @@ def admin_answer_full_text(row: dict) -> str:
         f"🧾 Вопрос: <b>#{row['ticket_id']}</b>",
         f"🏷 Тема: {category_name(row.get('category'), 'ru')}",
         f"📌 Статус: {status_name(row.get('status', 'open'))}",
-        f"🌐 Язык: {language_name(row.get('language'))}",
+        f"🌐 Язык интерфейса: {language_name(row.get('language'))}",
+        f"🗣 Язык вопроса: {question_language_name(row.get('question_language'))}",
         '',
         '<b>Кем задан вопрос</b>',
         f"👤 Имя: {h(user_name)}",
@@ -610,28 +653,39 @@ async def notify_staff_about_ticket(
     if not ticket:
         return
     text = ticket_card(ticket)
+
+    async def remember_sent(chat_id: int, sent: object | None) -> None:
+        message_id = getattr(sent, 'message_id', None)
+        if message_id is not None:
+            await db.add_staff_notification(ticket_id, chat_id, int(message_id))
+
     for admin_id in admin_ids:
         try:
-            await bot.send_message(
+            card = await bot.send_message(
                 admin_id,
                 f'🔔 <b>Новый вопрос шейху</b>\n\n{text}',
                 reply_markup=admin_ticket_kb(ticket_id, ticket['status']),
             )
-            await bot.copy_message(admin_id, user_message.chat.id, user_message.message_id)
+            await remember_sent(admin_id, card)
+            copied = await bot.copy_message(admin_id, user_message.chat.id, user_message.message_id)
+            await remember_sent(admin_id, copied)
         except Exception:
             logger.warning('Failed to notify admin %s about ticket %s', admin_id, ticket_id, exc_info=True)
             continue
 
     sheikh_text = '\n'.join([
         f"❓ <b>Вопрос №{ticket_id}</b>",
+        f"🗣 {question_language_name(ticket.get('question_language'))}",
         '',
         _message_body(message_text_preview(user_message), message_content_type(user_message), message_file_id(user_message)),
     ]).strip()
     for sheikh_id in sheikh_ids - admin_ids:
         try:
-            await bot.send_message(sheikh_id, sheikh_text, reply_markup=sheikh_question_kb(ticket_id))
+            card = await bot.send_message(sheikh_id, sheikh_text, reply_markup=sheikh_question_kb(ticket_id))
+            await remember_sent(sheikh_id, card)
             if message_file_id(user_message):
-                await bot.copy_message(sheikh_id, user_message.chat.id, user_message.message_id)
+                copied = await bot.copy_message(sheikh_id, user_message.chat.id, user_message.message_id)
+                await remember_sent(sheikh_id, copied)
         except Exception:
             logger.warning('Failed to notify sheikh %s about ticket %s', sheikh_id, ticket_id, exc_info=True)
             continue

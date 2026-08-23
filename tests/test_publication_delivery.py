@@ -121,6 +121,41 @@ async def test_text_answer_is_published_as_channel_post():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('question_content_type', ['photo', 'video'])
+async def test_text_answer_keeps_question_photo_or_video_in_publication(question_content_type):
+    bot = FakeBot()
+    row = _row('Текстовый ответ')
+    row['content_type'] = 'text'
+    row['answer_file_id'] = None
+    row['question_content_type'] = question_content_type
+    row['question_file_id'] = f'question_{question_content_type}_file_id'
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == question_content_type
+    assert bot.calls[0][2] == f'question_{question_content_type}_file_id'
+    assert 'Текстовый ответ' in bot.calls[0][3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('answer_content_type', ['voice', 'audio'])
+async def test_audio_answer_file_has_priority_over_question_media(answer_content_type):
+    bot = FakeBot()
+    row = _row(None)
+    row['question_content_type'] = 'photo'
+    row['question_file_id'] = 'question_photo_file_id'
+    row['content_type'] = answer_content_type
+    row['answer_file_id'] = f'answer_{answer_content_type}_file_id'
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == answer_content_type
+    assert bot.calls[0][2] == f'answer_{answer_content_type}_file_id'
+
+
+@pytest.mark.asyncio
 async def test_long_voice_publication_is_sent_as_single_caption_message():
     callback = FakeCallback()
 

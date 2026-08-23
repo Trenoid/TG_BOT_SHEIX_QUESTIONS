@@ -55,8 +55,8 @@ def test_publication_rules_allow_only_text_question_and_text_or_voice_answer():
     assert can_publish_via_bot(text_question_voice_answer) is True
     assert can_auto_publish_via_bot(photo_question_text_answer) is True
     assert can_auto_publish_via_bot(text_question_photo_answer) is True
-    assert can_publish_via_bot(photo_question_text_answer) is False
-    assert can_publish_via_bot(text_question_photo_answer) is False
+    assert can_publish_via_bot(photo_question_text_answer) is True
+    assert can_publish_via_bot(text_question_photo_answer) is True
 
 
 @pytest.mark.asyncio

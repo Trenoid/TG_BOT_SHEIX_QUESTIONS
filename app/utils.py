@@ -15,6 +15,10 @@ LANGUAGES = {
     'en': '🇬🇧 English',
     'ar': '🇸🇦 العربية',
 }
+QUESTION_LANGUAGES = {
+    'inh': 'Ингушский',
+    'ru': 'Русский',
+}
 
 STATUS_NAMES_RU = {
     'open': '🟢 открыт',
@@ -59,10 +63,16 @@ CATEGORY_NAMES = {
 TEXTS = {
     'ru': {
         'welcome': '<b>Ас-саляму алейкум! 👋</b>\n\nЭто бот <b>«Вопросы шейху»</b>. Здесь вы можете отправить вопрос по исламской теме, а администратор/шейх ответит вам прямо в Telegram.\n\nВыберите действие ниже:',
-        'help': '<b>Как пользоваться ботом</b>\n\n1. Нажмите <b>«Задать вопрос шейху»</b>.\n2. Выберите тему вопроса.\n3. Отправьте вопрос текстом. Можно приложить фото или видео с подписью.\n4. Когда ответ будет готов, он придёт сюда же в бот.\n\nКоманды:\n/start — открыть меню\n/new — задать вопрос\n/my — мои вопросы\n/language — сменить язык\n/help — помощь',
+        'help': '<b>Как пользоваться ботом</b>\n\n1. Нажмите <b>«Задать вопрос шейху»</b>.\n2. Выберите ингушский или русский язык вопроса.\n3. Выберите тему.\n4. Отправьте один цельный вопрос текстом. Можно приложить фото или видео с подписью.\n5. Когда ответ будет готов, он придёт сюда же в бот.\n\nКоманды:\n/start — открыть меню\n/new — задать вопрос\n/my — мои вопросы\n/language — сменить язык\n/help — помощь',
         'choose_language': 'Выберите язык интерфейса:',
         'language_saved': '✅ Язык сохранён: {language}',
         'choose_category': 'Выберите тему вопроса:',
+        'choose_question_language': 'На каком языке вы будете задавать вопрос?',
+        'question_language_mismatch': 'Текст похож на другой язык. Напишите вопрос на выбранном языке или нажмите «Отменить» и выберите язык заново.',
+        'question_blocked': 'Вы не можете задавать новые вопросы: {period}.',
+        'block_until': 'до {date}',
+        'block_forever': 'блокировка навсегда',
+        'question_cooldown': 'Новый вопрос можно задать через {minutes} мин. Один вопрос нужно отправлять целиком в одном сообщении.',
         'category_selected': 'Тема: <b>{category}</b>\n\nТеперь отправьте ваш вопрос текстом. Можно приложить фото или видео с подписью. Голосовые вопросы не принимаются.',
         'text_question_only': 'Пожалуйста, отправьте вопрос текстом, фото или видео с подписью. Голосовые сообщения и файлы для вопросов не принимаются.',
         'cancelled': 'Действие отменено.',
@@ -93,6 +103,12 @@ TEXTS = {
         'choose_language': 'Choose interface language:',
         'language_saved': '✅ Language saved: {language}',
         'choose_category': 'Choose the topic of your question:',
+        'choose_question_language': 'Choose the language in which you will write the question:',
+        'question_language_mismatch': 'The text appears to use another language. Write the question in the selected language or cancel and select the language again.',
+        'question_blocked': 'You cannot submit new questions: {period}.',
+        'block_until': 'until {date}',
+        'block_forever': 'permanently blocked',
+        'question_cooldown': 'You can submit another question in {minutes} min. Send one complete question in a single message.',
         'category_selected': 'Topic: <b>{category}</b>\n\nNow send your question as text. You may attach a photo or video with a caption. Voice questions are not accepted.',
         'text_question_only': 'Please send your question as text, a photo, or a video with a caption. Voice messages and files are not accepted for questions.',
         'cancelled': 'Action cancelled.',
@@ -123,6 +139,12 @@ TEXTS = {
         'choose_language': 'اختر لغة الواجهة:',
         'language_saved': '✅ تم حفظ اللغة: {language}',
         'choose_category': 'اختر موضوع السؤال:',
+        'choose_question_language': 'اختر لغة كتابة السؤال:',
+        'question_language_mismatch': 'يبدو أن النص مكتوب بلغة أخرى. اكتب السؤال باللغة المحددة أو ألغِ واختر اللغة من جديد.',
+        'question_blocked': 'لا يمكنك إرسال أسئلة جديدة: {period}.',
+        'block_until': 'حتى {date}',
+        'block_forever': 'حظر دائم',
+        'question_cooldown': 'يمكنك إرسال سؤال جديد بعد {minutes} دقيقة. أرسل السؤال كاملاً في رسالة واحدة.',
         'category_selected': 'الموضوع: <b>{category}</b>\n\nالآن أرسل سؤالك نصاً. يمكنك إرفاق صورة أو فيديو مع تعليق. لا تُقبل الأسئلة الصوتية.',
         'text_question_only': 'يرجى إرسال السؤال نصاً أو صورة أو فيديو مع تعليق. لا تُقبل الرسائل الصوتية أو الملفات للأسئلة.',
         'cancelled': 'تم إلغاء العملية.',
@@ -191,6 +213,10 @@ def category_name(category: str | None, lang: str | None = DEFAULT_LANG) -> str:
 
 def language_name(lang: str | None) -> str:
     return LANGUAGES.get(normalize_lang(lang), LANGUAGES[DEFAULT_LANG])
+
+
+def question_language_name(lang: str | None) -> str:
+    return QUESTION_LANGUAGES.get(lang or '', QUESTION_LANGUAGES['ru'])
 
 
 def user_link(user_id: int, full_name: str | None) -> str:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -7,8 +9,8 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.bot_commands import set_user_commands_for_chat
 from app.database import Database
-from app.keyboards import admin_panel_kb, cancel_kb, categories_kb, language_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
-from app.services import is_allowed_question_content, message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket
+from app.keyboards import admin_panel_kb, cancel_kb, categories_kb, language_kb, question_language_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
+from app.services import is_allowed_question_content, message_content_type, message_file_id, message_text_preview, notify_staff_about_ticket, question_matches_selected_language
 from app.states import UserTicketState
 from app.utils import category_name, format_dt, language_name, normalize_lang, status_name, t
 
@@ -55,6 +57,18 @@ async def _lang(db: Database, user_id: int) -> str:
     return await db.get_user_language(user_id)
 
 
+async def _question_access_error(db: Database, user_id: int, lang: str) -> str | None:
+    block = await db.get_active_block(user_id)
+    if block:
+        blocked_until = block.get('blocked_until')
+        period = t(lang, 'block_until', date=format_dt(blocked_until)) if blocked_until else t(lang, 'block_forever')
+        return t(lang, 'question_blocked', period=period)
+    remaining = await db.question_cooldown_seconds(user_id)
+    if remaining > 0:
+        return t(lang, 'question_cooldown', minutes=max(1, math.ceil(remaining / 60)))
+    return None
+
+
 def _tickets_summary(tickets: list[dict], lang: str) -> str:
     lines = [t(lang, 'your_tickets'), '']
     for ticket in tickets:
@@ -97,8 +111,13 @@ async def help_command(message: Message, db: Database) -> None:
 @router.message(Command('new'))
 async def new_command(message: Message, state: FSMContext, db: Database) -> None:
     lang = await _remember_user(message, db)
-    await state.set_state(UserTicketState.choosing_category)
-    await message.answer(t(lang, 'choose_category'), reply_markup=categories_kb(lang))
+    access_error = await _question_access_error(db, message.from_user.id, lang)
+    if access_error:
+        await state.clear()
+        await message.answer(access_error, reply_markup=user_menu_kb(lang))
+        return
+    await state.set_state(UserTicketState.choosing_question_language)
+    await message.answer(t(lang, 'choose_question_language'), reply_markup=question_language_kb(lang))
 
 
 @router.message(Command('my'))
@@ -170,8 +189,14 @@ async def new_ticket(callback: CallbackQuery, state: FSMContext, db: Database, a
         await callback.answer()
         return
     lang = await _lang(db, callback.from_user.id)
-    await state.set_state(UserTicketState.choosing_category)
-    await callback.message.edit_text(t(lang, 'choose_category'), reply_markup=categories_kb(lang))
+    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    if access_error:
+        await state.clear()
+        await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
+        await callback.answer()
+        return
+    await state.set_state(UserTicketState.choosing_question_language)
+    await callback.message.edit_text(t(lang, 'choose_question_language'), reply_markup=question_language_kb(lang))
     await callback.answer()
 
 
@@ -183,6 +208,25 @@ async def cancel(callback: CallbackQuery, state: FSMContext, db: Database) -> No
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith('user:question_lang:'))
+async def choose_question_language(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    lang = await _lang(db, callback.from_user.id)
+    question_language = callback.data.rsplit(':', 1)[-1]
+    if question_language not in {'inh', 'ru'}:
+        await callback.answer('Язык не поддерживается.', show_alert=True)
+        return
+    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    if access_error:
+        await state.clear()
+        await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
+        await callback.answer()
+        return
+    await state.update_data(question_language=question_language, language=lang)
+    await state.set_state(UserTicketState.choosing_category)
+    await callback.message.edit_text(t(lang, 'choose_category'), reply_markup=categories_kb(lang))
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith('user:category:'))
 async def choose_category(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
@@ -191,8 +235,21 @@ async def choose_category(callback: CallbackQuery, state: FSMContext, db: Databa
         await callback.answer()
         return
     lang = await _lang(db, callback.from_user.id)
+    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    if access_error:
+        await state.clear()
+        await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
+        await callback.answer()
+        return
+    data = await state.get_data()
+    question_language = data.get('question_language')
+    if question_language not in {'inh', 'ru'}:
+        await state.set_state(UserTicketState.choosing_question_language)
+        await callback.message.edit_text(t(lang, 'choose_question_language'), reply_markup=question_language_kb(lang))
+        await callback.answer()
+        return
     category = callback.data.split(':', 2)[2]
-    await state.update_data(category=category, language=lang)
+    await state.update_data(category=category, language=lang, question_language=question_language)
     await state.set_state(UserTicketState.waiting_question)
     await callback.message.edit_text(
         t(lang, 'category_selected', category=category_name(category, lang)),
@@ -208,20 +265,41 @@ async def receive_question(message: Message, state: FSMContext, db: Database, ad
     data = await state.get_data()
     lang = data.get('language') or await db.get_user_language(message.from_user.id)
     category = data.get('category') or 'other'
+    question_language = data.get('question_language')
+    access_error = await _question_access_error(db, message.from_user.id, lang)
+    if access_error:
+        await state.clear()
+        await message.answer(access_error, reply_markup=user_menu_kb(lang))
+        return
+    if question_language not in {'inh', 'ru'}:
+        await state.set_state(UserTicketState.choosing_question_language)
+        await message.answer(t(lang, 'choose_question_language'), reply_markup=question_language_kb(lang))
+        return
     if not is_allowed_question_content(message_content_type(message), message_text_preview(message)):
         await message.answer(t(lang, 'text_question_only'), reply_markup=cancel_kb(lang))
+        return
+    if not question_matches_selected_language(message_text_preview(message), question_language):
+        await message.answer(t(lang, 'question_language_mismatch'), reply_markup=cancel_kb(lang))
         return
     user = message.from_user
     full_name = user.full_name if user else 'Unknown'
     username = user.username if user else None
 
-    ticket_id = await db.create_ticket(
+    ticket_id, remaining = await db.create_ticket_with_cooldown(
         user_id=user.id,
         username=username,
         full_name=full_name,
         category=category,
         language=lang,
+        question_language=question_language,
     )
+    if ticket_id is None:
+        await state.clear()
+        await message.answer(
+            t(lang, 'question_cooldown', minutes=max(1, math.ceil(remaining / 60))),
+            reply_markup=user_menu_kb(lang),
+        )
+        return
     await db.add_message(
         ticket_id=ticket_id,
         sender_type='user',

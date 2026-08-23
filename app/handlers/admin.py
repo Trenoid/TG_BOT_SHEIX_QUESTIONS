@@ -10,9 +10,12 @@ from app.keyboards import (
     admin_answer_full_kb,
     admin_answer_sent_kb,
     admin_answers_history_kb,
+    admin_blocked_users_kb,
+    admin_block_duration_kb,
     admin_panel_kb,
     admin_publication_list_kb,
     admin_publication_review_kb,
+    admin_spam_confirm_kb,
     admin_ticket_kb,
     admin_tickets_list_kb,
     language_kb,
@@ -46,7 +49,7 @@ from app.services import (
     user_answer_intro_text,
 )
 from app.states import AdminAnswerState
-from app.utils import h, language_name, normalize_lang, status_name, t
+from app.utils import format_dt, h, language_name, normalize_lang, status_name, t, user_link
 
 router = Router(name='admin')
 MEDIA_CAPTION_LIMIT = 1024
@@ -161,8 +164,19 @@ async def _send_publication_to_channel(
     russian_audio_url: str | None = None,
 ) -> None:
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
-    file_id = row.get('answer_file_id')
-    content_type = normalize_content_type_value(row.get('content_type'))
+    answer_file_id = row.get('answer_file_id')
+    answer_content_type = normalize_content_type_value(row.get('content_type'))
+    question_file_id = row.get('question_file_id')
+    question_content_type = normalize_content_type_value(row.get('question_content_type'))
+    if answer_file_id:
+        file_id = answer_file_id
+        content_type = answer_content_type
+    elif question_file_id and question_content_type in {'photo', 'video'}:
+        file_id = question_file_id
+        content_type = question_content_type
+    else:
+        file_id = None
+        content_type = answer_content_type
     media_caption = f"Ответ шейха по вопросу №{row['ticket_id']}"
 
     async def send_saved_media(caption: str | None = None):
@@ -570,6 +584,165 @@ async def admin_list(callback: CallbackQuery, db: Database, admin_ids: set[int])
         text = f'Последние вопросы: <b>{status_name(status)}</b>\n\nНажмите на вопрос, чтобы открыть карточку.'
     await callback.message.edit_text(text, reply_markup=admin_tickets_list_kb(tickets, status))
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin:spam_menu:'), AdminFilter())
+async def admin_spam_menu(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    ticket_id = int(callback.data.rsplit(':', 1)[-1])
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    if ticket.get('status') != 'open':
+        await callback.answer('Как спам можно удалить только новый неотвеченный вопрос.', show_alert=True)
+        return
+    await callback.message.answer(
+        f'⚠️ Удалить вопрос <b>#{ticket_id}</b> как спам?\n\n'
+        'Он будет удалён из базы, а бот попытается убрать его карточки у всех админов и шейхов.',
+        reply_markup=admin_spam_confirm_kb(ticket_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin:spam_confirm:'), AdminFilter())
+async def admin_delete_spam(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    ticket_id = int(callback.data.rsplit(':', 1)[-1])
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос уже удалён.', show_alert=True)
+        return
+    if ticket.get('status') != 'open':
+        await callback.answer('Как спам можно удалить только новый неотвеченный вопрос.', show_alert=True)
+        return
+
+    notifications = await db.list_staff_notifications(ticket_id)
+    targets = {(int(item['chat_id']), int(item['message_id'])) for item in notifications}
+    targets.add((callback.message.chat.id, callback.message.message_id))
+    await callback.answer('Удаляю спам…')
+
+    deleted_messages = 0
+    for chat_id, message_id in targets:
+        try:
+            await callback.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            deleted_messages += 1
+        except Exception:
+            continue
+
+    await db.delete_ticket(ticket_id)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        f'✅ Спамный вопрос <b>#{ticket_id}</b> удалён. '
+        f'Удалось убрать сообщений из Telegram: <b>{deleted_messages}</b>.',
+        reply_markup=admin_panel_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith('admin:block_menu:'), AdminFilter())
+async def admin_block_menu(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    ticket_id = int(callback.data.rsplit(':', 1)[-1])
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    await callback.message.answer(
+        f'🚫 На какой срок заблокировать {user_link(ticket["user_id"], ticket.get("full_name"))}?',
+        reply_markup=admin_block_duration_kb(ticket_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'admin:blocked_users', AdminFilter())
+async def admin_blocked_users(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    blocks = await db.list_active_blocks()
+    lines = ['🚫 <b>Заблокированные пользователи</b>', '']
+    if not blocks:
+        lines.append('Заблокированных пользователей нет.')
+    else:
+        for block in blocks:
+            name = block.get('full_name') or (f"@{block.get('username')}" if block.get('username') else str(block['user_id']))
+            period = f"до {format_dt(block.get('blocked_until'))}" if block.get('blocked_until') else 'навсегда'
+            lines.append(f"• {h(name)} · <code>{block['user_id']}</code> · {period}")
+    await callback.message.edit_text('\n'.join(lines), reply_markup=admin_blocked_users_kb(blocks))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin:block:'), AdminFilter())
+async def admin_block_user(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    parts = callback.data.split(':')
+    if len(parts) != 4 or not parts[2].isdigit():
+        await callback.answer('Неверные данные.', show_alert=True)
+        return
+    ticket_id = int(parts[2])
+    duration = parts[3]
+    durations = {
+        'day': (24 * 60 * 60, '1 день'),
+        'week': (7 * 24 * 60 * 60, '1 неделю'),
+        'month': (30 * 24 * 60 * 60, '1 месяц'),
+        'forever': (None, 'навсегда'),
+    }
+    if duration not in durations:
+        await callback.answer('Неверный срок.', show_alert=True)
+        return
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    duration_seconds, duration_label = durations[duration]
+    await db.block_user(ticket['user_id'], blocked_by=callback.from_user.id, duration_seconds=duration_seconds)
+    await callback.message.edit_text(
+        f'✅ Пользователь {user_link(ticket["user_id"], ticket.get("full_name"))} '
+        f'заблокирован: <b>{duration_label}</b>.'
+    )
+    try:
+        await callback.bot.send_message(ticket['user_id'], f'🚫 Возможность задавать новые вопросы ограничена: <b>{duration_label}</b>.')
+    except Exception:
+        pass
+    await callback.answer('Пользователь заблокирован.')
+
+
+@router.callback_query(F.data.startswith('admin:unblock:'), AdminFilter())
+async def admin_unblock_user(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    ticket_id = int(callback.data.rsplit(':', 1)[-1])
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    await db.unblock_user(ticket['user_id'])
+    await callback.message.edit_text(f'✅ Пользователь {user_link(ticket["user_id"], ticket.get("full_name"))} разблокирован.')
+    await callback.answer('Блокировка снята.')
+
+
+@router.callback_query(F.data.startswith('admin:unblock_user:'), AdminFilter())
+async def admin_unblock_user_by_id(callback: CallbackQuery, db: Database, admin_ids: set[int]) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    user_id = int(callback.data.rsplit(':', 1)[-1])
+    await db.unblock_user(user_id)
+    blocks = await db.list_active_blocks()
+    await callback.message.edit_text(
+        '✅ Блокировка снята.',
+        reply_markup=admin_blocked_users_kb(blocks),
+    )
+    await callback.answer('Пользователь разблокирован.')
 
 
 @router.callback_query(F.data.startswith('admin:view:'), AdminFilter())

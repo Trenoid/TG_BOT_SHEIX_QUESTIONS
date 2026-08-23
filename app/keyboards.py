@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.utils import CATEGORY_NAMES, LANGUAGES, category_name, status_name, t
+from app.utils import CATEGORY_NAMES, LANGUAGES, QUESTION_LANGUAGES, category_name, status_name, t
 
 
 def language_kb(prefix: str = 'user') -> InlineKeyboardMarkup:
@@ -23,6 +23,15 @@ def user_menu_kb(lang: str = 'ru') -> InlineKeyboardMarkup:
 
 def categories_kb(lang: str = 'ru') -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=name, callback_data=f'user:category:{code}')] for code, name in CATEGORY_NAMES[lang].items()]
+    rows.append([InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data='user:menu')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def question_language_kb(lang: str = 'ru') -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=name, callback_data=f'user:question_lang:{code}')]
+        for code, name in QUESTION_LANGUAGES.items()
+    ]
     rows.append([InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data='user:menu')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -53,8 +62,40 @@ def admin_ticket_kb(ticket_id: int, status: str = 'open') -> InlineKeyboardMarku
     rows = [[InlineKeyboardButton(text='✍️ Ответить', callback_data=f'admin:answer:{ticket_id}')]]
     rows.append([InlineKeyboardButton(text='📄 Карточка', callback_data=f'admin:view:{ticket_id}')])
     rows.append([InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')])
+    rows.append([InlineKeyboardButton(text='🚫 Блокировать пользователя', callback_data=f'admin:block_menu:{ticket_id}')])
+    if status == 'open':
+        rows.append([InlineKeyboardButton(text='🗑 Удалить как спам', callback_data=f'admin:spam_menu:{ticket_id}')])
     rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_block_duration_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='1 день', callback_data=f'admin:block:{ticket_id}:day')],
+        [InlineKeyboardButton(text='1 неделя', callback_data=f'admin:block:{ticket_id}:week')],
+        [InlineKeyboardButton(text='1 месяц', callback_data=f'admin:block:{ticket_id}:month')],
+        [InlineKeyboardButton(text='Навсегда', callback_data=f'admin:block:{ticket_id}:forever')],
+        [InlineKeyboardButton(text='✅ Разблокировать', callback_data=f'admin:unblock:{ticket_id}')],
+    ])
+
+
+def admin_blocked_users_kb(blocks: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for block in blocks:
+        name = block.get('full_name') or (f"@{block.get('username')}" if block.get('username') else block['user_id'])
+        rows.append([InlineKeyboardButton(
+            text=f'✅ Разблокировать: {name}',
+            callback_data=f"admin:unblock_user:{block['user_id']}",
+        )])
+    rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_spam_confirm_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='🗑 Да, удалить везде', callback_data=f'admin:spam_confirm:{ticket_id}')],
+        [InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin:view:{ticket_id}')],
+    ])
 
 
 def admin_answer_sent_kb(
@@ -83,6 +124,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='🟡 Отвеченные вопросы', callback_data='admin:list:answered')],
         [InlineKeyboardButton(text='✅ Опубликованные ответы', callback_data='admin:list:published')],
         [InlineKeyboardButton(text='⚫ Закрытые вопросы', callback_data='admin:list:closed')],
+        [InlineKeyboardButton(text='🚫 Заблокированные', callback_data='admin:blocked_users')],
         [InlineKeyboardButton(text='📜 История ответов', callback_data='admin:answers_history:0')],
         [InlineKeyboardButton(text='📊 Статистика', callback_data='admin:stats')],
         [InlineKeyboardButton(text='🌐 Язык панели', callback_data='admin:language')],

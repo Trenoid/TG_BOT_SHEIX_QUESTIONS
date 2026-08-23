@@ -35,14 +35,22 @@ class FakeBot:
         self.fail_send_to = set(fail_send_to or set())
         self.sent_messages = []
         self.copied_messages = []
+        self.next_message_id = 1
+
+    def _sent(self):
+        message = type('SentMessage', (), {'message_id': self.next_message_id})()
+        self.next_message_id += 1
+        return message
 
     async def send_message(self, chat_id, text, **kwargs):
         if chat_id in self.fail_send_to:
             raise RuntimeError(f'cannot send to {chat_id}')
         self.sent_messages.append((chat_id, text, kwargs))
+        return self._sent()
 
     async def copy_message(self, chat_id, from_chat_id, message_id):
         self.copied_messages.append((chat_id, from_chat_id, message_id))
+        return self._sent()
 
 
 async def _create_ticket(db: Database) -> int:
@@ -84,6 +92,10 @@ async def test_new_ticket_is_sent_to_all_sheikhs(tmp_path):
     assert recipients == [10, 20, 30]
     assert any('Вопрос №1' in text for chat_id, text, _ in bot.sent_messages if chat_id == 20)
     assert any('Вопрос №1' in text for chat_id, text, _ in bot.sent_messages if chat_id == 30)
+    notifications = await db.list_staff_notifications(ticket_id)
+    assert {(item['chat_id'], item['message_id']) for item in notifications} == {
+        (10, 1), (10, 2), (20, 3), (30, 4),
+    }
 
 
 @pytest.mark.asyncio

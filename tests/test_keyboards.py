@@ -1,4 +1,4 @@
-from app.keyboards import admin_answer_sent_kb, admin_publication_review_kb, admin_ticket_kb, sheikh_panel_kb, sheikh_question_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
+from app.keyboards import admin_answer_sent_kb, admin_block_duration_kb, admin_publication_review_kb, admin_ticket_kb, question_language_kb, sheikh_panel_kb, sheikh_question_kb, user_menu_kb, user_ticket_kb, user_tickets_list_kb
 
 
 def _callback_data(markup):
@@ -33,6 +33,28 @@ def test_admin_ticket_keyboard_has_no_close_button():
     callbacks = _callback_data(admin_ticket_kb(ticket_id=5, status='open'))
     assert 'admin:close:5' not in callbacks
     assert all(not cb.startswith('admin:close:') for cb in callbacks if cb)
+    assert 'admin:block_menu:5' in callbacks
+    assert 'admin:spam_menu:5' in callbacks
+
+    answered_callbacks = _callback_data(admin_ticket_kb(ticket_id=5, status='answered'))
+    assert 'admin:block_menu:5' in answered_callbacks
+    assert 'admin:spam_menu:5' not in answered_callbacks
+
+
+def test_question_language_keyboard_has_only_ingush_russian_and_back():
+    callbacks = _callback_data(question_language_kb('ru'))
+    assert callbacks == ['user:question_lang:inh', 'user:question_lang:ru', 'user:menu']
+
+
+def test_admin_block_keyboard_has_all_durations_and_unblock():
+    callbacks = _callback_data(admin_block_duration_kb(5))
+    assert callbacks == [
+        'admin:block:5:day',
+        'admin:block:5:week',
+        'admin:block:5:month',
+        'admin:block:5:forever',
+        'admin:unblock:5',
+    ]
 
 
 def test_sheikh_panel_is_minimal():

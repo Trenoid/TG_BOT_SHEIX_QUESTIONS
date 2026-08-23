@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import math
+from datetime import datetime, timedelta
+
 import aiosqlite
 
-from app.utils import DEFAULT_LANG, now_iso, normalize_lang
+from app.utils import DEFAULT_LANG, MOSCOW_TZ, now_iso, normalize_lang
 
 
 ANSWER_CARD_SELECT = '''
@@ -23,6 +26,7 @@ ANSWER_CARD_SELECT = '''
         t.category,
         t.status,
         t.language,
+        t.question_language,
         t.created_at AS question_created_at,
         t.updated_at AS ticket_updated_at,
         (
@@ -105,6 +109,38 @@ class Database:
                 '''
             )
             await self._ensure_column(db, 'tickets', 'language', "TEXT NOT NULL DEFAULT 'ru'")
+            await self._ensure_column(db, 'tickets', 'question_language', "TEXT NOT NULL DEFAULT 'ru'")
+            await db.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS user_blocks (
+                    user_id INTEGER PRIMARY KEY,
+                    blocked_until TEXT,
+                    blocked_by INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                '''
+            )
+            await db.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS question_rate_limits (
+                    user_id INTEGER PRIMARY KEY,
+                    last_submitted_at TEXT NOT NULL
+                )
+                '''
+            )
+            await db.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS staff_notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(ticket_id, chat_id, message_id)
+                )
+                '''
+            )
             await db.commit()
 
     async def _ensure_column(self, db: aiosqlite.Connection, table: str, column: str, definition: str) -> None:
@@ -151,19 +187,211 @@ class Database:
             )
             await db.commit()
 
-    async def create_ticket(self, *, user_id: int, username: str | None, full_name: str, category: str, language: str = DEFAULT_LANG) -> int:
+    async def create_ticket(
+        self,
+        *,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        category: str,
+        language: str = DEFAULT_LANG,
+        question_language: str = 'ru',
+    ) -> int:
         ts = now_iso()
         lang = normalize_lang(language)
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 '''
-                INSERT INTO tickets(user_id, username, full_name, language, category, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+                INSERT INTO tickets(
+                    user_id, username, full_name, language, question_language,
+                    category, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 ''',
-                (user_id, username, full_name, lang, category, ts, ts),
+                (user_id, username, full_name, lang, question_language, category, ts, ts),
             )
             await db.commit()
             return int(cursor.lastrowid)
+
+    async def create_ticket_with_cooldown(
+        self,
+        *,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        category: str,
+        language: str = DEFAULT_LANG,
+        question_language: str = 'ru',
+        interval_seconds: int = 3600,
+    ) -> tuple[int | None, int]:
+        """Atomically create a ticket or return seconds left in the cooldown."""
+        now = datetime.now(MOSCOW_TZ)
+        ts = now.isoformat(timespec='seconds')
+        lang = normalize_lang(language)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('BEGIN IMMEDIATE')
+            cursor = await db.execute(
+                '''
+                SELECT COALESCE(
+                    (SELECT last_submitted_at FROM question_rate_limits WHERE user_id = ?),
+                    (SELECT MAX(created_at) FROM tickets WHERE user_id = ?)
+                )
+                ''',
+                (user_id, user_id),
+            )
+            row = await cursor.fetchone()
+            last_submitted_at = row[0] if row else None
+            if last_submitted_at:
+                try:
+                    elapsed = (now - datetime.fromisoformat(last_submitted_at)).total_seconds()
+                except (TypeError, ValueError):
+                    elapsed = interval_seconds
+                remaining = max(0, math.ceil(interval_seconds - elapsed))
+                if remaining > 0:
+                    await db.rollback()
+                    return None, remaining
+
+            cursor = await db.execute(
+                '''
+                INSERT INTO tickets(
+                    user_id, username, full_name, language, question_language,
+                    category, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                ''',
+                (user_id, username, full_name, lang, question_language, category, ts, ts),
+            )
+            await db.execute(
+                '''
+                INSERT INTO question_rate_limits(user_id, last_submitted_at)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET last_submitted_at = excluded.last_submitted_at
+                ''',
+                (user_id, ts),
+            )
+            await db.commit()
+            return int(cursor.lastrowid), 0
+
+    async def question_cooldown_seconds(self, user_id: int, interval_seconds: int = 3600) -> int:
+        now = datetime.now(MOSCOW_TZ)
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                '''
+                SELECT COALESCE(
+                    (SELECT last_submitted_at FROM question_rate_limits WHERE user_id = ?),
+                    (SELECT MAX(created_at) FROM tickets WHERE user_id = ?)
+                )
+                ''',
+                (user_id, user_id),
+            )
+            row = await cursor.fetchone()
+        if not row or not row[0]:
+            return 0
+        try:
+            elapsed = (now - datetime.fromisoformat(row[0])).total_seconds()
+        except (TypeError, ValueError):
+            return 0
+        return max(0, math.ceil(interval_seconds - elapsed))
+
+    async def block_user(self, user_id: int, *, blocked_by: int, duration_seconds: int | None) -> dict:
+        now = datetime.now(MOSCOW_TZ)
+        ts = now.isoformat(timespec='seconds')
+        blocked_until = None
+        if duration_seconds is not None:
+            blocked_until = (now + timedelta(seconds=duration_seconds)).isoformat(timespec='seconds')
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                '''
+                INSERT INTO user_blocks(user_id, blocked_until, blocked_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    blocked_until = excluded.blocked_until,
+                    blocked_by = excluded.blocked_by,
+                    updated_at = excluded.updated_at
+                ''',
+                (user_id, blocked_until, blocked_by, ts, ts),
+            )
+            await db.commit()
+        return {'user_id': user_id, 'blocked_until': blocked_until, 'blocked_by': blocked_by}
+
+    async def get_active_block(self, user_id: int) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('SELECT * FROM user_blocks WHERE user_id = ?', (user_id,))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            blocked_until = result.get('blocked_until')
+            if blocked_until:
+                try:
+                    expired = datetime.fromisoformat(blocked_until) <= datetime.now(MOSCOW_TZ)
+                except (TypeError, ValueError):
+                    expired = True
+                if expired:
+                    await db.execute('DELETE FROM user_blocks WHERE user_id = ?', (user_id,))
+                    await db.commit()
+                    return None
+            return result
+
+    async def unblock_user(self, user_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('DELETE FROM user_blocks WHERE user_id = ?', (user_id,))
+            await db.commit()
+
+    async def list_active_blocks(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                '''
+                SELECT b.*, u.username, u.full_name
+                FROM user_blocks b
+                LEFT JOIN users u ON u.user_id = b.user_id
+                ORDER BY b.updated_at DESC
+                '''
+            )
+            rows = [dict(row) for row in await cursor.fetchall()]
+        active: list[dict] = []
+        for row in rows:
+            block = await self.get_active_block(int(row['user_id']))
+            if block:
+                row.update(block)
+                active.append(row)
+        return active
+
+    async def add_staff_notification(self, ticket_id: int, chat_id: int, message_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                '''
+                INSERT OR IGNORE INTO staff_notifications(ticket_id, chat_id, message_id, created_at)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (ticket_id, chat_id, message_id, now_iso()),
+            )
+            await db.commit()
+
+    async def list_staff_notifications(self, ticket_id: int) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT chat_id, message_id FROM staff_notifications WHERE ticket_id = ? ORDER BY id',
+                (ticket_id,),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_ticket(self, ticket_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('BEGIN IMMEDIATE')
+            cursor = await db.execute('SELECT 1 FROM tickets WHERE id = ?', (ticket_id,))
+            exists = await cursor.fetchone()
+            if not exists:
+                await db.rollback()
+                return False
+            await db.execute('DELETE FROM staff_notifications WHERE ticket_id = ?', (ticket_id,))
+            await db.execute('DELETE FROM ticket_messages WHERE ticket_id = ?', (ticket_id,))
+            await db.execute('DELETE FROM tickets WHERE id = ?', (ticket_id,))
+            await db.commit()
+            return True
 
     async def add_message(
         self,
