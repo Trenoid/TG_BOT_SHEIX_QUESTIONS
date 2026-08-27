@@ -16,9 +16,15 @@ INGUSH_MARKERS = ('Ӏ', 'ӏ')
 STRONG_RUSSIAN_LANGUAGE_MARKERS = {
     'что', 'как', 'почему', 'можно', 'нельзя', 'если', 'или', 'когда',
     'где', 'какой', 'какая', 'какие', 'это', 'мне', 'мой', 'моя', 'нужно',
-    'правильно', 'вопрос', 'хочу', 'будет',
+    'правильно', 'вопрос', 'хочу', 'будет', 'есть', 'ещё', 'еще', 'один', 'одна',
 }
 WEAK_RUSSIAN_LANGUAGE_MARKERS = {'ли', 'на', 'для', 'про'}
+INGUSH_WORD_MARKERS = {
+    'цхьа', 'хаттар', 'кхори', 'гаьна', 'хьакх', 'мегаш', 'бий', 'бусулба', 'дын',
+    'миштад', 'нах', 'вайн', 'яхаш', 'хул', 'бакъ', 'харц', 'берза', 'саг', 'дукх', 'къамаьлаш',
+    'дувц', 'хьайн', 'ховр', 'сог', 'хулда', 'воалавалар', 'деза', 'мотт',
+}
+INGUSH_LETTER_PATTERN = re.compile(r'(къ|хь|кх|цх|оаг|гӀ|кӀ|тӀ|хӀ|чӀ)')
 
 
 def normalize_content_type_value(value: object | None) -> str:
@@ -91,17 +97,21 @@ def question_matches_selected_language(text: str | None, question_language: str)
         return False
     if not re.search(r'[а-яёӀӏ]', value):
         return False
-    has_ingush_marker = any(marker in value for marker in INGUSH_MARKERS)
-    words = set(re.findall(r'[а-яё]+', value))
-    has_strong_russian_marker = bool(words & STRONG_RUSSIAN_LANGUAGE_MARKERS)
-    weak_russian_score = len(words & WEAK_RUSSIAN_LANGUAGE_MARKERS)
+
+    # Telegram users often type digit 1 or Latin I instead of the Cyrillic palochka.
+    normalized = re.sub(r'(?<=[а-яёӀӏ])[1i](?=[а-яёӀӏ])', 'Ӏ', value)
+    words = re.findall(r'[а-яёӀӏ]+', normalized)
+    russian_score = sum(2 for word in words if word in STRONG_RUSSIAN_LANGUAGE_MARKERS)
+    russian_score += sum(1 for word in words if word in WEAK_RUSSIAN_LANGUAGE_MARKERS)
+    ingush_score = sum(2 for word in words if any(marker in word for marker in INGUSH_MARKERS))
+    ingush_score += sum(1 for word in words if word in INGUSH_WORD_MARKERS)
+    ingush_score += sum(1 for word in words if INGUSH_LETTER_PATTERN.search(word))
+
     if question_language == 'ru':
-        return not has_ingush_marker or has_strong_russian_marker or weak_russian_score >= 2
-    if question_language != 'inh' or has_ingush_marker:
-        return True
-    if has_strong_russian_marker:
-        return False
-    return weak_russian_score < 2
+        return ingush_score < 2 or russian_score >= ingush_score
+    if question_language == 'inh':
+        return ingush_score >= 2 or russian_score < 2
+    return False
 
 
 def is_question_text_only(row: dict) -> bool:

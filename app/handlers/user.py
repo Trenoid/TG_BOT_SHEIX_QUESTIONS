@@ -57,12 +57,19 @@ async def _lang(db: Database, user_id: int) -> str:
     return await db.get_user_language(user_id)
 
 
-async def _question_access_error(db: Database, user_id: int, lang: str) -> str | None:
+async def _question_access_error(
+    db: Database,
+    user_id: int,
+    lang: str,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> str | None:
     block = await db.get_active_block(user_id)
     if block:
         blocked_until = block.get('blocked_until')
         period = t(lang, 'block_until', date=format_dt(blocked_until)) if blocked_until else t(lang, 'block_forever')
         return t(lang, 'question_blocked', period=period)
+    if user_id in (question_cooldown_exempt_ids or set()):
+        return None
     remaining = await db.question_cooldown_seconds(user_id)
     if remaining > 0:
         return t(lang, 'question_cooldown', minutes=max(1, math.ceil(remaining / 60)))
@@ -109,9 +116,19 @@ async def help_command(message: Message, db: Database) -> None:
 
 
 @router.message(Command('new'))
-async def new_command(message: Message, state: FSMContext, db: Database) -> None:
+async def new_command(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> None:
     lang = await _remember_user(message, db)
-    access_error = await _question_access_error(db, message.from_user.id, lang)
+    access_error = await _question_access_error(
+        db,
+        message.from_user.id,
+        lang,
+        question_cooldown_exempt_ids,
+    )
     if access_error:
         await state.clear()
         await message.answer(access_error, reply_markup=user_menu_kb(lang))
@@ -179,7 +196,14 @@ async def user_help(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data == 'user:new_ticket')
-async def new_ticket(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
+async def new_ticket(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    admin_ids: set[int],
+    sheikh_ids: set[int] | None = None,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> None:
     if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await state.clear()
         await callback.message.edit_text(
@@ -189,7 +213,12 @@ async def new_ticket(callback: CallbackQuery, state: FSMContext, db: Database, a
         await callback.answer()
         return
     lang = await _lang(db, callback.from_user.id)
-    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    access_error = await _question_access_error(
+        db,
+        callback.from_user.id,
+        lang,
+        question_cooldown_exempt_ids,
+    )
     if access_error:
         await state.clear()
         await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
@@ -209,13 +238,23 @@ async def cancel(callback: CallbackQuery, state: FSMContext, db: Database) -> No
 
 
 @router.callback_query(F.data.startswith('user:question_lang:'))
-async def choose_question_language(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+async def choose_question_language(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> None:
     lang = await _lang(db, callback.from_user.id)
     question_language = callback.data.rsplit(':', 1)[-1]
     if question_language not in {'inh', 'ru'}:
         await callback.answer('Язык не поддерживается.', show_alert=True)
         return
-    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    access_error = await _question_access_error(
+        db,
+        callback.from_user.id,
+        lang,
+        question_cooldown_exempt_ids,
+    )
     if access_error:
         await state.clear()
         await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
@@ -228,14 +267,26 @@ async def choose_question_language(callback: CallbackQuery, state: FSMContext, d
 
 
 @router.callback_query(F.data.startswith('user:category:'))
-async def choose_category(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
+async def choose_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    admin_ids: set[int],
+    sheikh_ids: set[int] | None = None,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> None:
     if callback.from_user.id in _staff_ids(admin_ids, sheikh_ids):
         await state.clear()
         await callback.message.edit_text('Это действие доступно только обычному пользователю.', reply_markup=admin_panel_kb())
         await callback.answer()
         return
     lang = await _lang(db, callback.from_user.id)
-    access_error = await _question_access_error(db, callback.from_user.id, lang)
+    access_error = await _question_access_error(
+        db,
+        callback.from_user.id,
+        lang,
+        question_cooldown_exempt_ids,
+    )
     if access_error:
         await state.clear()
         await callback.message.edit_text(access_error, reply_markup=user_menu_kb(lang))
@@ -259,14 +310,26 @@ async def choose_category(callback: CallbackQuery, state: FSMContext, db: Databa
 
 
 @router.message(UserTicketState.waiting_question)
-async def receive_question(message: Message, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
+async def receive_question(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    admin_ids: set[int],
+    sheikh_ids: set[int] | None = None,
+    question_cooldown_exempt_ids: set[int] | None = None,
+) -> None:
     if not _is_private(message):
         return
     data = await state.get_data()
     lang = data.get('language') or await db.get_user_language(message.from_user.id)
     category = data.get('category') or 'other'
     question_language = data.get('question_language')
-    access_error = await _question_access_error(db, message.from_user.id, lang)
+    access_error = await _question_access_error(
+        db,
+        message.from_user.id,
+        lang,
+        question_cooldown_exempt_ids,
+    )
     if access_error:
         await state.clear()
         await message.answer(access_error, reply_markup=user_menu_kb(lang))
@@ -292,6 +355,7 @@ async def receive_question(message: Message, state: FSMContext, db: Database, ad
         category=category,
         language=lang,
         question_language=question_language,
+        interval_seconds=0 if user.id in (question_cooldown_exempt_ids or set()) else 3600,
     )
     if ticket_id is None:
         await state.clear()

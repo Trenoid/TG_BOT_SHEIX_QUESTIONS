@@ -117,6 +117,7 @@ copy .env.example .env
 BOT_TOKEN=токен_бота_от_BotFather
 ADMIN_IDS=691367615
 SHEIKH_IDS=123456789
+QUESTION_COOLDOWN_EXEMPT_IDS=731354094
 DATABASE_PATH=data/support_bot.db
 PUBLICATION_CHANNEL=https://t.me/your_channel
 ```
@@ -126,9 +127,12 @@ PUBLICATION_CHANNEL=https://t.me/your_channel
 ```env
 ADMIN_IDS=691367615,123456789,987654321
 SHEIKH_IDS=111111111,222222222
+QUESTION_COOLDOWN_EXEMPT_IDS=731354094,987654321
 ```
 
 Если один и тот же Telegram ID указан и в `ADMIN_IDS`, и в `SHEIKH_IDS`, бот считает его обычным администратором и показывает расширенную панель.
+
+ID из `QUESTION_COOLDOWN_EXEMPT_IDS` могут задавать новые вопросы без ожидания одного часа. Несколько ID указываются через запятую; обычные блокировки пользователей продолжают действовать.
 
 `PUBLICATION_CHANNEL` принимает публичную ссылку `https://t.me/channel`, username `@channel` или числовой id канала вида `-100...`. Бот должен быть администратором канала.
 
@@ -269,6 +273,7 @@ sudo journalctl -u sheikh-bot -f
 
 - проверка парсинга `ADMIN_IDS`;
 - проверка парсинга `SHEIKH_IDS`/канала публикации;
+- проверка исключений из часового интервала через `QUESTION_COOLDOWN_EXEMPT_IDS`;
 - проверка, что у пользователя нет кнопки открытия карточки вопроса;
 - проверка, что у админа нет кнопки закрытия вопроса;
 - проверка минимальных клавиатур шейха;

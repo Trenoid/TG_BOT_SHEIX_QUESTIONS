@@ -13,6 +13,7 @@ class Config:
     bot_token: str
     admin_ids: set[int]
     sheikh_ids: set[int]
+    question_cooldown_exempt_ids: set[int]
     database_path: str
     publication_channel: int | str | None
     russian_audio_url: str | None
@@ -57,6 +58,7 @@ def load_config() -> Config:
     bot_token = os.getenv('BOT_TOKEN', '').strip()
     admin_ids_raw = os.getenv('ADMIN_IDS', '').strip()
     sheikh_ids_raw = os.getenv('SHEIKH_IDS', '').strip()
+    question_cooldown_exempt_ids_raw = os.getenv('QUESTION_COOLDOWN_EXEMPT_IDS', '').strip()
     database_path = os.getenv('DATABASE_PATH', 'data/support_bot.db').strip()
     publication_channel = _normalize_publication_channel(os.getenv('PUBLICATION_CHANNEL'))
     russian_audio_url = _normalize_optional_text(os.getenv('RUSSIAN_AUDIO_URL'))
@@ -69,12 +71,17 @@ def load_config() -> Config:
         raise RuntimeError('ADMIN_IDS is empty. Put at least one Telegram numeric ID into .env')
 
     sheikh_ids = _parse_admin_ids(sheikh_ids_raw, env_name='SHEIKH_IDS')
+    question_cooldown_exempt_ids = _parse_admin_ids(
+        question_cooldown_exempt_ids_raw,
+        env_name='QUESTION_COOLDOWN_EXEMPT_IDS',
+    )
 
     Path(database_path).parent.mkdir(parents=True, exist_ok=True)
     return Config(
         bot_token=bot_token,
         admin_ids=admin_ids,
         sheikh_ids=sheikh_ids,
+        question_cooldown_exempt_ids=question_cooldown_exempt_ids,
         database_path=database_path,
         publication_channel=publication_channel,
         russian_audio_url=russian_audio_url,

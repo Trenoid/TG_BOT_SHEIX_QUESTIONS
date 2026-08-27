@@ -34,6 +34,7 @@ async def main() -> None:
     dp['db'] = db
     dp['admin_ids'] = config.admin_ids
     dp['sheikh_ids'] = config.sheikh_ids
+    dp['question_cooldown_exempt_ids'] = config.question_cooldown_exempt_ids
     dp['publication_channel'] = config.publication_channel
     dp['russian_audio_url'] = config.russian_audio_url
 
