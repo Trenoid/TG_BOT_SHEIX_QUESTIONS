@@ -30,6 +30,7 @@ from app.services import (
     can_auto_publish_via_bot,
     can_publish_via_bot,
     content_type_label,
+    is_answer_continuation,
     message_content_type,
     message_file_id,
     message_text_preview,
@@ -72,6 +73,14 @@ def is_sheikh_only(user_id: int | None, admin_ids: set[int], sheikh_ids: set[int
     return is_sheikh(user_id, sheikh_ids) and not is_admin(user_id, admin_ids)
 
 
+def answer_access_error(ticket_status: str, *, sheikh_role: bool) -> str | None:
+    if ticket_status == 'closed':
+        return 'Вопрос уже закрыт.'
+    if sheikh_role and ticket_status != 'open':
+        return 'На этот вопрос уже был дан ответ.'
+    return None
+
+
 class AdminFilter(BaseFilter):
     async def __call__(self, event: TelegramObject, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> bool:
         user = getattr(event, 'from_user', None)
@@ -97,8 +106,8 @@ async def _send_admin_panel(message: Message, db: Database) -> None:
         'Здесь вы видите вопросы, которые отправили пользователи. '\
         'Вы можете открыть вопрос, ответить на него и подготовить ответы шейха к публикации.\n\n'
         f'🟢 Новых вопросов: <b>{stats["open"]}</b>\n'
-        f'🟡 Ожидают публикации: <b>{stats["answered"]}</b>\n'
-        f'✅ Опубликованных: <b>{stats["published"]}</b>\n'
+        f'🟡 Ожидают публикации: <b>{stats["answers_pending"]}</b>\n'
+        f'✅ Опубликованных ответов: <b>{stats["answers_published"]}</b>\n'
         f'⚫ Закрытых: <b>{stats["closed"]}</b>\n'
         f'📚 Всего вопросов: <b>{stats["all"]}</b>\n\n'
         'Выберите раздел ниже:',
@@ -113,8 +122,8 @@ async def _edit_admin_panel(callback: CallbackQuery, db: Database) -> None:
         'Здесь вы видите вопросы, которые отправили пользователи. '\
         'Вы можете открыть вопрос, ответить на него и подготовить ответы шейха к публикации.\n\n'
         f'🟢 Новых вопросов: <b>{stats["open"]}</b>\n'
-        f'🟡 Ожидают публикации: <b>{stats["answered"]}</b>\n'
-        f'✅ Опубликованных: <b>{stats["published"]}</b>\n'
+        f'🟡 Ожидают публикации: <b>{stats["answers_pending"]}</b>\n'
+        f'✅ Опубликованных ответов: <b>{stats["answers_published"]}</b>\n'
         f'⚫ Закрытых: <b>{stats["closed"]}</b>\n'
         f'📚 Всего вопросов: <b>{stats["all"]}</b>\n\n'
         'Выберите раздел ниже:',
@@ -177,7 +186,11 @@ async def _send_publication_to_channel(
     else:
         file_id = None
         content_type = answer_content_type
-    media_caption = f"Ответ шейха по вопросу №{row['ticket_id']}"
+    media_caption = (
+        f"Продолжение ответа к вопросу №{row['ticket_id']}"
+        if is_answer_continuation(row)
+        else f"Ответ шейха по вопросу №{row['ticket_id']}"
+    )
 
     async def send_saved_media(caption: str | None = None):
         if content_type == 'voice':
@@ -198,7 +211,7 @@ async def _send_publication_to_channel(
         can_caption = content_type in {'voice', 'audio', 'photo', 'video', 'document'}
         if can_caption:
             linked_chat_id = await _linked_discussion_chat_id(bot, publication_channel)
-            if linked_chat_id:
+            if linked_chat_id and not is_answer_continuation(row):
                 caption, question_remainder = publication_caption_parts(
                     row,
                     publication_channel=publication_channel,
@@ -514,11 +527,12 @@ async def answer_command(message: Message, state: FSMContext, db: Database, admi
     if not ticket:
         await message.answer('Вопрос не найден.')
         return
-    if ticket['status'] in {'closed', 'published'}:
-        await message.answer('Этот вопрос уже закрыт или опубликован.')
-        return
-    if is_sheikh_only(message.from_user.id, admin_ids, sheikh_ids) and ticket['status'] != 'open':
-        await message.answer('На этот вопрос уже был дан ответ.')
+    access_error = answer_access_error(
+        ticket['status'],
+        sheikh_role=is_sheikh_only(message.from_user.id, admin_ids, sheikh_ids),
+    )
+    if access_error:
+        await message.answer(access_error)
         return
     await state.set_state(AdminAnswerState.waiting_answer)
     await state.update_data(ticket_id=ticket_id, source_chat_id=None, source_message_id=None)
@@ -555,7 +569,7 @@ async def stats_callback(callback: CallbackQuery, db: Database, admin_ids: set[i
         return
     stats = await db.stats()
     await callback.answer(
-        f'Новых: {stats["open"]}\nОжидают публикации: {stats["answered"]}\nОпубликованных: {stats["published"]}\nЗакрытых: {stats["closed"]}\nВсего: {stats["all"]}',
+        f'Новых: {stats["open"]}\nОжидают публикации: {stats["answers_pending"]}\nОпубликованных ответов: {stats["answers_published"]}\nЗакрытых: {stats["closed"]}\nВсего вопросов: {stats["all"]}',
         show_alert=True,
     )
 
@@ -783,12 +797,15 @@ async def admin_review_publication(
 
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     chunks = split_telegram_text(text)
-    can_publish = row.get('status') == 'answered' and can_publish_via_bot(row)
+    pending_answers = await db.list_ticket_answers_for_publication(row['ticket_id'], status='answered')
+    can_publish = row.get('publication_status') == 'pending' and can_publish_via_bot(row)
+    can_publish_all = len(pending_answers) > 1 and all(can_publish_via_bot(item) for item in pending_answers)
     markup = admin_publication_review_kb(
         row['ticket_id'],
         row['message_id'],
         can_publish=can_publish,
-        can_mark_published=row.get('status') == 'answered' and not can_publish,
+        can_mark_published=row.get('publication_status') == 'pending' and not can_publish,
+        can_publish_all=can_publish_all,
     )
     await callback.message.edit_text(chunks[0], reply_markup=markup, disable_web_page_preview=True)
     for index, chunk in enumerate(chunks[1:], start=2):
@@ -820,11 +837,11 @@ async def admin_publish_answer(
     if not row:
         await callback.answer('Ответ не найден.', show_alert=True)
         return
-    if row.get('status') == 'published':
+    if row.get('publication_status') == 'published':
         await callback.answer('Этот ответ уже опубликован.', show_alert=True)
         return
-    if row.get('status') != 'answered':
-        await callback.answer('Опубликовать можно только отвеченный и ещё не опубликованный вопрос.', show_alert=True)
+    if row.get('publication_status') != 'pending':
+        await callback.answer('Опубликовать можно только ещё не опубликованный ответ.', show_alert=True)
         return
     if not can_publish_via_bot(row):
         await callback.answer('Этот ответ нужно опубликовать вручную, затем отметить как опубликованный.', show_alert=True)
@@ -841,8 +858,8 @@ async def admin_publish_answer(
         await callback.answer('Не удалось опубликовать в канал. Проверьте PUBLICATION_CHANNEL и права бота.', show_alert=True)
         return
 
-    await db.set_status(row['ticket_id'], 'published')
-    row['status'] = 'published'
+    await db.mark_answer_published(row['message_id'])
+    row['publication_status'] = 'published'
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     chunks = split_telegram_text(text)
     await callback.message.edit_text(
@@ -850,8 +867,73 @@ async def admin_publish_answer(
         reply_markup=admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=False),
         disable_web_page_preview=True,
     )
-    await callback.message.answer(f"✅ Вопрос №<b>{row['ticket_id']}</b> успешно опубликован в канал.")
+    await callback.message.answer(
+        f"✅ Ответ №<b>{row['answer_number']}</b> к вопросу "
+        f"№<b>{row['ticket_id']}</b> успешно опубликован в канал."
+    )
     await callback.answer('Ответ опубликован.')
+
+
+@router.callback_query(F.data.startswith('admin:publish_all:'), AdminFilter())
+async def admin_publish_all_answers(
+    callback: CallbackQuery,
+    db: Database,
+    admin_ids: set[int],
+    publication_channel: int | str | None = None,
+    russian_audio_url: str | None = None,
+) -> None:
+    if not is_admin(callback.from_user.id, admin_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    if publication_channel is None:
+        await callback.answer('В .env не указан PUBLICATION_CHANNEL.', show_alert=True)
+        return
+    parts = callback.data.split(':')
+    if len(parts) < 3 or not parts[2].isdigit():
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    ticket_id = int(parts[2])
+    rows = await db.list_ticket_answers_for_publication(ticket_id, status='answered')
+    if not rows:
+        await callback.answer('Неопубликованных ответов по этому вопросу нет.', show_alert=True)
+        return
+    if any(not can_publish_via_bot(row) for row in rows):
+        await callback.answer(
+            'Среди ответов есть вложения, которые нужно опубликовать вручную. '
+            'Откройте их по одному.',
+            show_alert=True,
+        )
+        return
+
+    published_count = 0
+    already_published = await db.list_ticket_answers_for_publication(ticket_id, status='published')
+    publication_position = len(already_published)
+    for row in rows:
+        row['is_continuation'] = publication_position > 0
+        try:
+            await _send_publication_to_channel(
+                callback.bot,
+                row,
+                publication_channel=publication_channel,
+                russian_audio_url=russian_audio_url,
+            )
+        except Exception:
+            await callback.message.answer(
+                f'⚠️ Опубликовано ответов: <b>{published_count}</b>. '
+                'На следующем ответе публикация остановлена. '
+                'Уже отправленные ответы повторно не отправятся.'
+            )
+            await callback.answer('Массовая публикация остановлена.', show_alert=True)
+            return
+        await db.mark_answer_published(row['message_id'])
+        published_count += 1
+        publication_position += 1
+
+    await callback.message.answer(
+        f'✅ В канал опубликованы все ответы к вопросу '
+        f'№<b>{ticket_id}</b>. Количество публикаций: <b>{published_count}</b>.'
+    )
+    await callback.answer(f'Опубликовано ответов: {published_count}.')
 
 
 @router.callback_query(F.data.startswith('admin:mark_published:'), AdminFilter())
@@ -874,15 +956,15 @@ async def admin_mark_answer_published(
     if not row:
         await callback.answer('Ответ не найден.', show_alert=True)
         return
-    if row.get('status') == 'published':
+    if row.get('publication_status') == 'published':
         await callback.answer('Этот ответ уже отмечен опубликованным.', show_alert=True)
         return
-    if row.get('status') != 'answered':
-        await callback.answer('Отметить можно только отвеченный и ещё не опубликованный вопрос.', show_alert=True)
+    if row.get('publication_status') != 'pending':
+        await callback.answer('Отметить можно только ещё не опубликованный ответ.', show_alert=True)
         return
 
-    await db.set_status(row['ticket_id'], 'published')
-    row['status'] = 'published'
+    await db.mark_answer_published(row['message_id'])
+    row['publication_status'] = 'published'
     text = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     chunks = split_telegram_text(text)
     await callback.message.edit_text(
@@ -890,7 +972,10 @@ async def admin_mark_answer_published(
         reply_markup=admin_publication_review_kb(row['ticket_id'], row['message_id'], can_publish=False, can_mark_published=False),
         disable_web_page_preview=True,
     )
-    await callback.message.answer(f"✅ Вопрос №<b>{row['ticket_id']}</b> отмечен как опубликованный.")
+    await callback.message.answer(
+        f"✅ Ответ №<b>{row['answer_number']}</b> к вопросу "
+        f"№<b>{row['ticket_id']}</b> отмечен как опубликованный."
+    )
     await callback.answer('Отмечено как опубликованное.')
 
 
@@ -1036,11 +1121,12 @@ async def admin_answer_start(callback: CallbackQuery, state: FSMContext, db: Dat
     if not ticket:
         await callback.answer('Вопрос не найден.', show_alert=True)
         return
-    if ticket['status'] in {'closed', 'published'}:
-        await callback.answer('Вопрос уже закрыт или опубликован.', show_alert=True)
-        return
-    if is_sheikh_only(callback.from_user.id, admin_ids, sheikh_ids) and ticket['status'] != 'open':
-        await callback.answer('На этот вопрос уже был дан ответ.', show_alert=True)
+    access_error = answer_access_error(
+        ticket['status'],
+        sheikh_role=is_sheikh_only(callback.from_user.id, admin_ids, sheikh_ids),
+    )
+    if access_error:
+        await callback.answer(access_error, show_alert=True)
         return
     await state.set_state(AdminAnswerState.waiting_answer)
     await state.update_data(
@@ -1083,13 +1169,10 @@ async def admin_send_answer(
         await state.clear()
         await message.answer('Вопрос не найден.', reply_markup=panel_markup)
         return
-    if ticket['status'] in {'closed', 'published'}:
+    access_error = answer_access_error(ticket['status'], sheikh_role=sheikh_role)
+    if access_error:
         await state.clear()
-        await message.answer('Вопрос уже закрыт или опубликован.', reply_markup=panel_markup)
-        return
-    if sheikh_role and ticket['status'] != 'open':
-        await state.clear()
-        await message.answer('На этот вопрос уже был дан ответ.', reply_markup=panel_markup)
+        await message.answer(access_error, reply_markup=panel_markup)
         return
 
     await db.upsert_user(
@@ -1145,7 +1228,7 @@ async def admin_send_answer(
                     publication_channel=publication_channel,
                     russian_audio_url=russian_audio_url,
                 )
-                await db.set_status(ticket_id, 'published')
+                await db.mark_answer_published(answer_message_id)
                 await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>. Ответ опубликован в канал.', reply_markup=sheikh_panel_kb())
             except Exception:
                 await message.answer(f'✅ Вы ответили на вопрос №<b>{ticket_id}</b>. Не удалось автоматически опубликовать ответ в канал, отправил его администратору.', reply_markup=sheikh_panel_kb())
@@ -1170,13 +1253,17 @@ async def admin_send_answer(
     else:
         row = await db.get_sheikh_answer_for_publication(answer_message_id)
         can_publish_answer = bool(row and can_publish_via_bot(row))
+        pending_answers = await db.list_ticket_answers_for_publication(ticket_id, status='answered')
+        can_publish_all = len(pending_answers) > 1 and all(can_publish_via_bot(item) for item in pending_answers)
         await message.answer(
-            f'✅ Ответ отправлен пользователю по вопросу <b>#{ticket_id}</b>.',
+            f"✅ Ответ №<b>{row.get('answer_number') if row else 1}</b> "
+            f'отправлен пользователю по вопросу <b>#{ticket_id}</b>.',
             reply_markup=admin_answer_sent_kb(
                 ticket_id,
                 answer_message_id,
                 can_publish=can_publish_answer,
                 can_mark_published=bool(row and not can_publish_answer),
+                can_publish_all=can_publish_all,
             ),
         )
         await notify_admins_status(

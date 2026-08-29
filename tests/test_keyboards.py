@@ -72,6 +72,7 @@ def test_publication_review_keyboard_has_publish_only_when_allowed():
     already_published = _callback_data(admin_publication_review_kb(ticket_id=10, answer_message_id=55, can_publish=False))
     assert 'admin:publish:55' in publishable
     assert 'admin:publish:55' not in already_published
+    assert 'admin:answer:10' in publishable
 
 
 def test_publication_review_keyboard_has_mark_button_when_manual_publication_needed():
@@ -89,6 +90,24 @@ def test_admin_answer_sent_keyboard_has_publish_button():
     callbacks = _callback_data(admin_answer_sent_kb(ticket_id=16, answer_message_id=17))
     assert 'admin:publish:17' in callbacks
     assert 'admin:view:16' in callbacks
+    assert 'admin:answer:16' in callbacks
+
+
+def test_admin_publication_keyboards_can_publish_all_answers():
+    sent_callbacks = _callback_data(admin_answer_sent_kb(
+        ticket_id=16,
+        answer_message_id=17,
+        can_publish_all=True,
+    ))
+    review_callbacks = _callback_data(admin_publication_review_kb(
+        ticket_id=16,
+        answer_message_id=17,
+        can_publish=True,
+        can_publish_all=True,
+    ))
+
+    assert 'admin:publish_all:16' in sent_callbacks
+    assert 'admin:publish_all:16' in review_callbacks
 
 
 def test_admin_answer_sent_keyboard_has_mark_button_when_manual_publication_needed():

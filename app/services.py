@@ -368,10 +368,27 @@ def _publication_question_body(row: dict, *, limit: int | None = None) -> str:
     return h(text)
 
 
-def _publication_answer_body(row: dict) -> str:
+def _publication_answer_body(row: dict, *, limit: int | None = None) -> str:
     if _is_placeholder_text(row.get('answer_text'), row.get('content_type')):
         return content_type_label(row.get('content_type'))
-    return h(str(row.get('answer_text')).strip())
+    text = str(row.get('answer_text')).strip()
+    if limit is not None:
+        text = _truncate_plain_text(text, limit)
+    return h(text)
+
+
+def is_answer_continuation(row: dict) -> bool:
+    if 'is_continuation' in row:
+        return bool(row['is_continuation'])
+    if row.get('published_answer_count') is not None:
+        try:
+            return int(row['published_answer_count']) > 0
+        except (TypeError, ValueError):
+            return False
+    try:
+        return int(row.get('answer_number') or 1) > 1
+    except (TypeError, ValueError):
+        return False
 
 
 def publication_text(
@@ -380,12 +397,12 @@ def publication_text(
     publication_channel: int | str | None = None,
     russian_audio_url: str | None = None,
     question_limit: int | None = None,
+    answer_limit: int | None = None,
     question_continues_in_comments: bool = False,
     question_continuation_note: str | None = None,
 ) -> str:
     """Text that is shown to admins and then posted to the channel."""
-    question = _publication_question_body(row, limit=question_limit)
-    answer = _publication_answer_body(row)
+    answer = _publication_answer_body(row, limit=answer_limit)
     channel_url = channel_public_url(publication_channel)
     channel_line = '<b>Ссылка на канал:</b> Ответы Шейха'
     if channel_url:
@@ -395,24 +412,24 @@ def publication_text(
         f'<a href="https://t.me/{QUESTION_BOT_USERNAME}">@{QUESTION_BOT_USERNAME}</a>'
     )
 
-    lines = [
-        '<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>',
-        '',
-        f"<b>ВОПРОС ❓ №{row['ticket_id']}:</b>",
-        question,
-    ]
-    if question_continuation_note is None and question_continues_in_comments:
-        question_continuation_note = QUESTION_CONTINUATION_NOTE
-    if question_continuation_note:
-        lines.extend(['', question_continuation_note])
-    lines.extend([
-        '',
-        '<b>ОТВЕТ✅:</b>',
-        answer,
-        '',
-        channel_line,
-        question_bot_line,
-    ])
+    lines = ['<b>Ответы на вопросы | Шейх Абдул-Малик Хайров</b>', '']
+    if is_answer_continuation(row):
+        lines.extend([
+            f"<b>ПРОДОЛЖЕНИЕ ОТВЕТА К ВОПРОСУ ❓ №{row['ticket_id']}:</b>",
+            answer,
+        ])
+    else:
+        question = _publication_question_body(row, limit=question_limit)
+        lines.extend([
+            f"<b>ВОПРОС ❓ №{row['ticket_id']}:</b>",
+            question,
+        ])
+        if question_continuation_note is None and question_continues_in_comments:
+            question_continuation_note = QUESTION_CONTINUATION_NOTE
+        if question_continuation_note:
+            lines.extend(['', question_continuation_note])
+        lines.extend(['', '<b>ОТВЕТ✅:</b>', answer])
+    lines.extend(['', channel_line, question_bot_line])
     return '\n'.join(lines).strip()
 
 
@@ -442,6 +459,33 @@ def _fit_publication_caption(
     )
     if len(text) <= limit:
         return text, None
+
+    if is_answer_continuation(row):
+        answer_text = str(row.get('answer_text') or '').strip()
+        if _is_placeholder_text(answer_text, row.get('content_type')):
+            return text, None
+        low = 0
+        high = len(answer_text)
+        best = publication_text(
+            row,
+            publication_channel=publication_channel,
+            russian_audio_url=russian_audio_url,
+            answer_limit=0,
+        )
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = publication_text(
+                row,
+                publication_channel=publication_channel,
+                russian_audio_url=russian_audio_url,
+                answer_limit=mid,
+            )
+            if len(candidate) <= limit:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best, None
 
     if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
         return _truncate_plain_text(text, limit), None
@@ -476,6 +520,38 @@ def _fit_publication_caption(
             high = mid - 1
     if len(best) <= limit:
         return best, _shown_question_chars(question_text, best_limit)
+
+    answer_text = str(row.get('answer_text') or '').strip()
+    if not _is_placeholder_text(answer_text, row.get('content_type')):
+        low = 0
+        high = len(answer_text)
+        best = publication_text(
+            row,
+            publication_channel=publication_channel,
+            russian_audio_url=russian_audio_url,
+            question_limit=0,
+            answer_limit=0,
+            question_continues_in_comments=question_continues_in_comments,
+            question_continuation_note=question_continuation_note,
+        )
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = publication_text(
+                row,
+                publication_channel=publication_channel,
+                russian_audio_url=russian_audio_url,
+                question_limit=0,
+                answer_limit=mid,
+                question_continues_in_comments=question_continues_in_comments,
+                question_continuation_note=question_continuation_note,
+            )
+            if len(candidate) <= limit:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        if len(best) <= limit:
+            return best, 0
     return _truncate_plain_text(best, limit), 0
 
 
@@ -507,6 +583,13 @@ def publication_caption_parts(
     full = publication_text(row, publication_channel=publication_channel, russian_audio_url=russian_audio_url)
     if len(full) <= limit:
         return full, None
+    if is_answer_continuation(row):
+        return publication_caption_text(
+            row,
+            publication_channel=publication_channel,
+            russian_audio_url=russian_audio_url,
+            limit=limit,
+        ), None
     if _is_placeholder_text(row.get('question_text'), row.get('question_content_type')):
         return _truncate_plain_text(full, limit), None
 
@@ -550,10 +633,11 @@ def admin_answers_history_text(rows: list[dict], *, page: int = 0, total_pages: 
             answer_preview_source = content_type_label(row.get('content_type'))
         question_preview = h(_plain_preview(question_preview_source, 120))
         answer_preview = h(_plain_preview(answer_preview_source, 120))
+        publication_status = '✅ опубликован' if row.get('publication_status') == 'published' else '🟡 ожидает публикации'
         lines.extend([
             '',
-            f"<b>#{row['ticket_id']} · ответ #{row['message_id']} · {category_name(row.get('category'), 'ru')}</b>",
-            f"📌 Статус: {status_name(row.get('status', 'open'))}",
+            f"<b>#{row['ticket_id']} · ответ №{row.get('answer_number') or 1} · {category_name(row.get('category'), 'ru')}</b>",
+            f"📌 Статус ответа: {publication_status}",
             f"🕒 Вопрос: {format_dt(row.get('question_created_at'))}",
             f"👤 Задал: {h(user_name)} · <code>{row.get('user_id')}</code>",
             f"✅ Ответил: {h(admin_name)} · <code>{row.get('admin_id')}</code>",
@@ -572,13 +656,14 @@ def admin_answer_full_text(row: dict) -> str:
     admin_username = f"@{h(row.get('admin_username'))}" if row.get('admin_username') else '—'
     question = _message_body(row.get('question_text'), row.get('question_content_type'), row.get('question_file_id'))
     answer = _message_body(row.get('answer_text'), row.get('content_type'), row.get('answer_file_id'))
+    publication_status = '✅ опубликован' if row.get('publication_status') == 'published' else '🟡 ожидает публикации'
 
     return '\n'.join([
         f"📄 <b>Полная карточка ответа #{row['message_id']}</b>",
         '',
         f"🧾 Вопрос: <b>#{row['ticket_id']}</b>",
         f"🏷 Тема: {category_name(row.get('category'), 'ru')}",
-        f"📌 Статус: {status_name(row.get('status', 'open'))}",
+        f"📌 Статус ответа: {publication_status}",
         f"🌐 Язык интерфейса: {language_name(row.get('language'))}",
         f"🗣 Язык вопроса: {question_language_name(row.get('question_language'))}",
         '',
@@ -632,7 +717,8 @@ async def send_answer_media_preview(bot: Bot, chat_id: int, row: dict) -> bool:
         return False
 
     content_type = normalize_content_type_value(row.get('content_type'))
-    caption = f"Оригинал ответа шейха по вопросу №{row['ticket_id']} · {content_type_label(content_type)}"
+    answer_label = 'Продолжение ответа к вопросу' if is_answer_continuation(row) else 'Оригинал ответа шейха по вопросу'
+    caption = f"{answer_label} №{row['ticket_id']} · {content_type_label(content_type)}"
     if content_type == 'voice':
         await bot.send_voice(chat_id, file_id, caption=caption)
     elif content_type == 'photo':
@@ -719,8 +805,8 @@ async def notify_admins_about_publication_ready(
                 reply_markup=admin_publication_review_kb(
                     answer_row['ticket_id'],
                     answer_row['message_id'],
-                    can_publish=answer_row.get('status') == 'answered' and can_publish_via_bot(answer_row),
-                    can_mark_published=answer_row.get('status') == 'answered' and not can_publish_via_bot(answer_row),
+                    can_publish=answer_row.get('publication_status') == 'pending' and can_publish_via_bot(answer_row),
+                    can_mark_published=answer_row.get('publication_status') == 'pending' and not can_publish_via_bot(answer_row),
                 ),
                 disable_web_page_preview=True,
             )

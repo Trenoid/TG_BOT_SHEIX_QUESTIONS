@@ -104,13 +104,17 @@ def admin_answer_sent_kb(
     *,
     can_publish: bool = True,
     can_mark_published: bool = False,
+    can_publish_all: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_publish:
         rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
     if can_mark_published:
         rows.append([InlineKeyboardButton(text='✅ Отметить как опубликованный', callback_data=f'admin:mark_published:{answer_message_id}')])
+    if can_publish_all:
+        rows.append([InlineKeyboardButton(text='📣 Опубликовать все ответы', callback_data=f'admin:publish_all:{ticket_id}')])
     rows.extend([
+        [InlineKeyboardButton(text='✍️ Добавить ещё ответ', callback_data=f'admin:answer:{ticket_id}')],
         [InlineKeyboardButton(text='📄 Карточка', callback_data=f'admin:view:{ticket_id}')],
         [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
         [InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')],
@@ -170,8 +174,9 @@ def admin_publication_list_kb(answer_rows: list[dict], status: str) -> InlineKey
     rows: list[list[InlineKeyboardButton]] = []
     for row in answer_rows:
         action = 'Предпросмотр' if status == 'answered' else 'Открыть'
+        answer_number = row.get('answer_number') or row['message_id']
         rows.append([InlineKeyboardButton(
-            text=f"{action}: вопрос #{row['ticket_id']} / ответ #{row['message_id']}",
+            text=f"{action}: вопрос #{row['ticket_id']} / ответ №{answer_number}",
             callback_data=f"admin:review:{row['message_id']}",
         )])
     rows.append([InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')])
@@ -184,13 +189,17 @@ def admin_publication_review_kb(
     *,
     can_publish: bool,
     can_mark_published: bool = False,
+    can_publish_all: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_publish:
         rows.append([InlineKeyboardButton(text='📣 Опубликовать', callback_data=f'admin:publish:{answer_message_id}')])
     if can_mark_published:
         rows.append([InlineKeyboardButton(text='✅ Отметить как опубликованный', callback_data=f'admin:mark_published:{answer_message_id}')])
+    if can_publish_all:
+        rows.append([InlineKeyboardButton(text='📣 Опубликовать все ответы', callback_data=f'admin:publish_all:{ticket_id}')])
     rows.extend([
+        [InlineKeyboardButton(text='✍️ Добавить ещё ответ', callback_data=f'admin:answer:{ticket_id}')],
         [InlineKeyboardButton(text='📜 История вопроса', callback_data=f'admin:history:{ticket_id}')],
         [InlineKeyboardButton(text='⬅️ Панель шейха', callback_data='admin:panel')],
     ])

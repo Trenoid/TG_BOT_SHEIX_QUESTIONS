@@ -1,6 +1,61 @@
+import aiosqlite
 import pytest
 
 from app.database import Database
+
+
+@pytest.mark.asyncio
+async def test_existing_database_migrates_to_per_answer_publication_status(tmp_path):
+    path = tmp_path / 'support_bot.db'
+    async with aiosqlite.connect(path) as connection:
+        await connection.execute(
+            '''
+            CREATE TABLE users (
+                user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
+                language TEXT NOT NULL DEFAULT 'ru', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        await connection.execute(
+            '''
+            CREATE TABLE tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT,
+                full_name TEXT, language TEXT NOT NULL DEFAULT 'ru', category TEXT NOT NULL DEFAULT 'other',
+                status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'normal',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
+            )
+            '''
+        )
+        await connection.execute(
+            '''
+            CREATE TABLE ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL, sender_type TEXT NOT NULL,
+                sender_id INTEGER NOT NULL, text TEXT, content_type TEXT, file_id TEXT, created_at TEXT NOT NULL
+            )
+            '''
+        )
+        await connection.execute(
+            "INSERT INTO tickets(user_id, status, created_at, updated_at) VALUES (100, 'published', '2026-01-01', '2026-01-02')"
+        )
+        await connection.execute(
+            "INSERT INTO ticket_messages(ticket_id, sender_type, sender_id, text, content_type, created_at) VALUES (1, 'user', 100, 'Вопрос', 'text', '2026-01-01')"
+        )
+        await connection.execute(
+            "INSERT INTO ticket_messages(ticket_id, sender_type, sender_id, text, content_type, created_at) VALUES (1, 'admin', 200, 'Первый ответ', 'text', '2026-01-01')"
+        )
+        await connection.execute(
+            "INSERT INTO ticket_messages(ticket_id, sender_type, sender_id, text, content_type, created_at) VALUES (1, 'admin', 200, 'Последний ответ', 'text', '2026-01-02')"
+        )
+        await connection.commit()
+
+    db = Database(str(path))
+    await db.init()
+
+    pending = await db.list_ticket_answers_for_publication(1, status='answered')
+    published = await db.list_ticket_answers_for_publication(1, status='published')
+    assert [row['answer_text'] for row in pending] == ['Первый ответ']
+    assert [row['answer_text'] for row in published] == ['Последний ответ']
+    assert (await db.get_ticket(1))['status'] == 'answered'
 
 
 @pytest.mark.asyncio
@@ -116,7 +171,7 @@ async def test_get_admin_answer_returns_full_texts(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sheikh_answers_move_from_publication_queue_to_published(tmp_path):
+async def test_multiple_answers_have_independent_publication_statuses(tmp_path):
     db = Database(str(tmp_path / 'support_bot.db'))
     await db.init()
 
@@ -139,14 +194,14 @@ async def test_sheikh_answers_move_from_publication_queue_to_published(tmp_path)
     )
     first_answer_id = await db.add_message(
         ticket_id=ticket_id,
-        sender_type='sheikh',
+        sender_type='admin',
         sender_id=400,
         text='Первый ответ.',
         content_type='text',
     )
     latest_answer_id = await db.add_message(
         ticket_id=ticket_id,
-        sender_type='sheikh',
+        sender_type='admin',
         sender_id=400,
         text='Последний ответ.',
         content_type='text',
@@ -155,16 +210,39 @@ async def test_sheikh_answers_move_from_publication_queue_to_published(tmp_path)
 
     assert first_answer_id != latest_answer_id
     rows = await db.list_sheikh_answers_for_publication(status='answered')
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert rows[0]['message_id'] == latest_answer_id
     assert rows[0]['answer_text'] == 'Последний ответ.'
-    assert await db.count_sheikh_answers_for_publication(status='answered') == 1
+    assert rows[0]['answer_number'] == 2
+    assert rows[1]['answer_number'] == 1
+    assert await db.count_sheikh_answers_for_publication(status='answered') == 2
 
-    await db.set_status(ticket_id, 'published')
-    assert await db.list_sheikh_answers_for_publication(status='answered') == []
+    await db.mark_answer_published(latest_answer_id)
+    pending = await db.list_sheikh_answers_for_publication(status='answered')
+    assert [row['message_id'] for row in pending] == [first_answer_id]
     published = await db.list_sheikh_answers_for_publication(status='published')
     assert len(published) == 1
     assert published[0]['message_id'] == latest_answer_id
+    assert (await db.get_ticket(ticket_id))['status'] == 'answered'
+
+    await db.mark_answer_published(first_answer_id)
+    assert await db.list_sheikh_answers_for_publication(status='answered') == []
+    assert len(await db.list_sheikh_answers_for_publication(status='published')) == 2
+    assert (await db.get_ticket(ticket_id))['status'] == 'published'
+
+    third_answer_id = await db.add_message(
+        ticket_id=ticket_id,
+        sender_type='admin',
+        sender_id=400,
+        text='Третий ответ после публикации.',
+        content_type='text',
+    )
+    await db.set_status(ticket_id, 'answered')
+
+    pending = await db.list_ticket_answers_for_publication(ticket_id, status='answered')
+    assert [row['message_id'] for row in pending] == [third_answer_id]
+    assert pending[0]['answer_number'] == 3
+    assert (await db.get_ticket(ticket_id))['status'] == 'answered'
 
 
 @pytest.mark.asyncio

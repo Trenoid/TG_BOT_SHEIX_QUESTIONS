@@ -138,6 +138,24 @@ def test_publication_voice_answer_has_clean_media_label():
     assert '<b>Ссылка на канал:</b> <a href="https://t.me/test_channel_questions">Ответы Шейха</a>' in text
 
 
+def test_follow_up_publication_is_labeled_as_answer_continuation():
+    row = {
+        'ticket_id': 14,
+        'answer_number': 2,
+        'question_text': 'Длинный исходный вопрос',
+        'question_content_type': 'text',
+        'answer_text': 'Продолжение ответа',
+        'content_type': 'text',
+        'answer_file_id': None,
+    }
+
+    text = publication_text(row, publication_channel='@answers_channel')
+
+    assert 'ПРОДОЛЖЕНИЕ ОТВЕТА К ВОПРОСУ ❓ №14' in text
+    assert 'Продолжение ответа' in text
+    assert 'Длинный исходный вопрос' not in text
+
+
 def test_publication_caption_text_fits_telegram_caption_limit():
     row = {
         'ticket_id': 40,

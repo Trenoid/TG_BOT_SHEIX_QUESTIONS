@@ -18,6 +18,8 @@ ANSWER_CARD_SELECT = '''
         tm.content_type,
         tm.file_id AS answer_file_id,
         tm.created_at AS answered_at,
+        tm.publication_status,
+        tm.published_at,
         au.username AS admin_username,
         au.full_name AS admin_full_name,
         t.user_id,
@@ -49,7 +51,34 @@ ANSWER_CARD_SELECT = '''
             WHERE qm.ticket_id = t.id AND qm.sender_type = 'user'
             ORDER BY qm.id ASC
             LIMIT 1
-        ) AS question_file_id
+        ) AS question_file_id,
+        (
+            SELECT COUNT(*)
+            FROM ticket_messages numbered
+            WHERE numbered.ticket_id = tm.ticket_id
+              AND numbered.sender_type IN ('admin', 'sheikh')
+              AND numbered.id <= tm.id
+        ) AS answer_number,
+        (
+            SELECT COUNT(*)
+            FROM ticket_messages answer_count
+            WHERE answer_count.ticket_id = tm.ticket_id
+              AND answer_count.sender_type IN ('admin', 'sheikh')
+        ) AS answer_count,
+        (
+            SELECT COUNT(*)
+            FROM ticket_messages pending_count
+            WHERE pending_count.ticket_id = tm.ticket_id
+              AND pending_count.sender_type IN ('admin', 'sheikh')
+              AND pending_count.publication_status = 'pending'
+        ) AS pending_answer_count,
+        (
+            SELECT COUNT(*)
+            FROM ticket_messages published_count
+            WHERE published_count.ticket_id = tm.ticket_id
+              AND published_count.sender_type IN ('admin', 'sheikh')
+              AND published_count.publication_status = 'published'
+        ) AS published_answer_count
     FROM ticket_messages tm
     JOIN tickets t ON t.id = tm.ticket_id
     LEFT JOIN users au ON au.user_id = tm.sender_id
@@ -110,6 +139,64 @@ class Database:
             )
             await self._ensure_column(db, 'tickets', 'language', "TEXT NOT NULL DEFAULT 'ru'")
             await self._ensure_column(db, 'tickets', 'question_language', "TEXT NOT NULL DEFAULT 'ru'")
+            await self._ensure_column(db, 'ticket_messages', 'publication_status', 'TEXT')
+            await self._ensure_column(db, 'ticket_messages', 'published_at', 'TEXT')
+            await db.execute(
+                '''
+                UPDATE ticket_messages AS answer
+                SET publication_status = CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM tickets published_ticket
+                        WHERE published_ticket.id = answer.ticket_id
+                          AND published_ticket.status = 'published'
+                    )
+                    AND answer.id = (
+                        SELECT MAX(latest.id)
+                        FROM ticket_messages latest
+                        WHERE latest.ticket_id = answer.ticket_id
+                          AND latest.sender_type IN ('admin', 'sheikh')
+                    ) THEN 'published'
+                    ELSE 'pending'
+                END
+                WHERE answer.sender_type IN ('admin', 'sheikh')
+                  AND answer.publication_status IS NULL
+                '''
+            )
+            await db.execute(
+                '''
+                UPDATE tickets
+                SET status = 'answered'
+                WHERE status != 'closed'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM ticket_messages pending_answer
+                      WHERE pending_answer.ticket_id = tickets.id
+                        AND pending_answer.sender_type IN ('admin', 'sheikh')
+                        AND pending_answer.publication_status = 'pending'
+                  )
+                '''
+            )
+            await db.execute(
+                '''
+                UPDATE tickets
+                SET status = 'published'
+                WHERE status != 'closed'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM ticket_messages any_answer
+                      WHERE any_answer.ticket_id = tickets.id
+                        AND any_answer.sender_type IN ('admin', 'sheikh')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM ticket_messages pending_answer
+                      WHERE pending_answer.ticket_id = tickets.id
+                        AND pending_answer.sender_type IN ('admin', 'sheikh')
+                        AND pending_answer.publication_status != 'published'
+                  )
+                '''
+            )
             await db.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS user_blocks (
@@ -404,13 +491,17 @@ class Database:
         file_id: str | None = None,
     ) -> int:
         ts = now_iso()
+        publication_status = 'pending' if sender_type in {'admin', 'sheikh'} else None
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 '''
-                INSERT INTO ticket_messages(ticket_id, sender_type, sender_id, text, content_type, file_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO ticket_messages(
+                    ticket_id, sender_type, sender_id, text, content_type, file_id,
+                    publication_status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
-                (ticket_id, sender_type, sender_id, text, content_type, file_id, ts),
+                (ticket_id, sender_type, sender_id, text, content_type, file_id, publication_status, ts),
             )
             await db.execute('UPDATE tickets SET updated_at = ? WHERE id = ?', (ts, ticket_id))
             await db.commit()
@@ -427,11 +518,84 @@ class Database:
         ts = now_iso()
         closed_at = ts if status == 'closed' else None
         async with aiosqlite.connect(self.path) as db:
+            if status == 'published':
+                await db.execute(
+                    '''
+                    UPDATE ticket_messages
+                    SET publication_status = 'published', published_at = COALESCE(published_at, ?)
+                    WHERE ticket_id = ?
+                      AND sender_type IN ('admin', 'sheikh')
+                      AND publication_status != 'published'
+                    ''',
+                    (ts, ticket_id),
+                )
             await db.execute(
                 'UPDATE tickets SET status = ?, updated_at = ?, closed_at = COALESCE(?, closed_at) WHERE id = ?',
                 (status, ts, closed_at, ticket_id),
             )
             await db.commit()
+
+    async def mark_answer_published(self, message_id: int) -> bool:
+        """Mark one answer as published and synchronize its ticket status."""
+        ts = now_iso()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('BEGIN IMMEDIATE')
+            cursor = await db.execute(
+                '''
+                SELECT ticket_id
+                FROM ticket_messages
+                WHERE id = ? AND sender_type IN ('admin', 'sheikh')
+                ''',
+                (message_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                await db.rollback()
+                return False
+            ticket_id = int(row[0])
+            await db.execute(
+                '''
+                UPDATE ticket_messages
+                SET publication_status = 'published', published_at = COALESCE(published_at, ?)
+                WHERE id = ?
+                ''',
+                (ts, message_id),
+            )
+            await self._sync_ticket_publication_status(db, ticket_id, ts)
+            await db.commit()
+            return True
+
+    async def _sync_ticket_publication_status(
+        self,
+        db: aiosqlite.Connection,
+        ticket_id: int,
+        ts: str | None = None,
+    ) -> None:
+        cursor = await db.execute('SELECT status FROM tickets WHERE id = ?', (ticket_id,))
+        ticket = await cursor.fetchone()
+        if not ticket or ticket[0] == 'closed':
+            return
+        cursor = await db.execute(
+            '''
+            SELECT
+                COUNT(*),
+                SUM(CASE WHEN publication_status = 'published' THEN 0 ELSE 1 END)
+            FROM ticket_messages
+            WHERE ticket_id = ? AND sender_type IN ('admin', 'sheikh')
+            ''',
+            (ticket_id,),
+        )
+        answer_count, pending_count = await cursor.fetchone()
+        if not answer_count:
+            status = 'open'
+        elif pending_count:
+            status = 'answered'
+        else:
+            status = 'published'
+        await db.execute(
+            'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
+            (status, ts or now_iso(), ticket_id),
+        )
 
     async def list_tickets(self, *, status: str | None = None, user_id: int | None = None, limit: int = 10) -> list[dict]:
         query = 'SELECT * FROM tickets'
@@ -542,26 +706,24 @@ class Database:
             return int(row[0] if row else 0)
 
     async def list_sheikh_answers_for_publication(self, *, status: str = 'answered', limit: int = 10, offset: int = 0) -> list[dict]:
+        publication_status = 'pending' if status == 'answered' else status
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 ANSWER_CARD_SELECT + '''
                     WHERE tm.sender_type IN ('admin', 'sheikh')
-                      AND t.status = ?
-                      AND tm.id = (
-                          SELECT MAX(latest.id)
-                          FROM ticket_messages latest
-                          WHERE latest.ticket_id = t.id AND latest.sender_type IN ('admin', 'sheikh')
-                      )
+                      AND tm.publication_status = ?
+                      AND (? != 'pending' OR t.status != 'closed')
                     ORDER BY tm.id DESC
                     LIMIT ? OFFSET ?
                 ''',
-                (status, limit, offset),
+                (publication_status, publication_status, limit, offset),
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
     async def count_sheikh_answers_for_publication(self, *, status: str = 'answered') -> int:
+        publication_status = 'pending' if status == 'answered' else status
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 '''
@@ -569,17 +731,33 @@ class Database:
                 FROM ticket_messages tm
                 JOIN tickets t ON t.id = tm.ticket_id
                 WHERE tm.sender_type IN ('admin', 'sheikh')
-                  AND t.status = ?
-                  AND tm.id = (
-                      SELECT MAX(latest.id)
-                      FROM ticket_messages latest
-                      WHERE latest.ticket_id = t.id AND latest.sender_type IN ('admin', 'sheikh')
-                  )
+                  AND tm.publication_status = ?
+                  AND (? != 'pending' OR t.status != 'closed')
                 ''',
-                (status,),
+                (publication_status, publication_status),
             )
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
+
+    async def list_ticket_answers_for_publication(
+        self,
+        ticket_id: int,
+        *,
+        status: str = 'answered',
+    ) -> list[dict]:
+        publication_status = 'pending' if status == 'answered' else status
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                ANSWER_CARD_SELECT + '''
+                    WHERE tm.sender_type IN ('admin', 'sheikh')
+                      AND tm.ticket_id = ?
+                      AND tm.publication_status = ?
+                    ORDER BY tm.id ASC
+                ''',
+                (ticket_id, publication_status),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def get_sheikh_answer_for_publication(self, message_id: int) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
@@ -602,4 +780,19 @@ class Database:
                 result[status] = int((await cursor.fetchone())[0])
             cursor = await db.execute('SELECT COUNT(*) FROM tickets')
             result['all'] = int((await cursor.fetchone())[0])
+            cursor = await db.execute(
+                '''
+                SELECT COUNT(*)
+                FROM ticket_messages tm
+                JOIN tickets t ON t.id = tm.ticket_id
+                WHERE tm.sender_type IN ('admin', 'sheikh')
+                  AND tm.publication_status = 'pending'
+                  AND t.status != 'closed'
+                '''
+            )
+            result['answers_pending'] = int((await cursor.fetchone())[0])
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM ticket_messages WHERE sender_type IN ('admin', 'sheikh') AND publication_status = 'published'"
+            )
+            result['answers_published'] = int((await cursor.fetchone())[0])
             return result

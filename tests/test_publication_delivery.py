@@ -87,6 +87,20 @@ async def test_short_publication_is_sent_together_as_voice_caption():
 
 
 @pytest.mark.asyncio
+async def test_follow_up_voice_is_one_post_with_continuation_caption():
+    bot = FakeBot(linked_chat_id=-100777)
+    row = _row('Дополнение к голосовому ответу')
+    row['answer_number'] = 2
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == 'voice'
+    assert 'ПРОДОЛЖЕНИЕ ОТВЕТА К ВОПРОСУ ❓ №5' in bot.calls[0][3]
+    assert len(bot.calls[0][3]) <= 1024
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('content_type', ['audio', 'photo', 'video', 'document'])
 async def test_each_caption_media_answer_is_published_immediately(content_type):
     bot = FakeBot()
