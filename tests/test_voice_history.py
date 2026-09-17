@@ -2,7 +2,7 @@ import pytest
 
 from app.database import Database
 from app.keyboards import admin_answer_full_kb
-from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, can_auto_publish_via_bot, can_publish_via_bot, content_type_label, is_allowed_question_content, normalize_content_type_value, publication_caption_text, publication_text, user_answer_intro_text
+from app.services import answer_prompt_text, admin_answer_full_text, admin_answers_history_text, can_auto_publish_via_bot, can_publish_via_bot, content_type_label, is_allowed_question_content, message_text_preview, normalize_content_type_value, publication_caption_text, publication_text, user_answer_intro_text
 
 
 def _callback_data(markup):
@@ -110,6 +110,7 @@ def test_publication_text_matches_channel_shape():
 
     assert 'Ответы на вопросы | Шейх Абдул-Малик Хайров' in text
     assert 'ВОПРОС ❓ №723' in text
+    assert '<i>Ас-Саляму алейкум уа рахматулЛахи уа баракатух</i>' in text
     assert 'ОТВЕТ✅:' in text
     assert 'Прослушать на русском' not in text
     assert 'Орфография и пунктуация автора сохранены' not in text
@@ -190,6 +191,13 @@ def test_answer_prompt_contains_question_text_without_question_number():
     assert 'Тестовый вопрос про финансы' in text
     assert '#6' not in text
     assert '№6' not in text
+
+
+def test_message_text_preview_keeps_full_telegram_text():
+    full_text = 'а' * 4096
+    message = type('TextMessage', (), {'text': full_text, 'caption': None})()
+
+    assert message_text_preview(message) == full_text
 
 
 def test_user_answer_intro_contains_original_question_without_number():

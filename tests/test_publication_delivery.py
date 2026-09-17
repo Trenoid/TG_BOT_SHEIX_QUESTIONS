@@ -1,6 +1,13 @@
+from types import SimpleNamespace
+
 import pytest
 
-from app.handlers.admin import _send_publication_to_channel
+from app.handlers.admin import (
+    _remember_discussion_forward,
+    _send_publication_to_channel,
+    _wait_for_discussion_forward,
+    remember_discussion_forward,
+)
 from app.services import send_answer_media_preview
 
 
@@ -190,6 +197,7 @@ async def test_long_voice_publication_is_sent_as_single_caption_message():
 async def test_long_voice_publication_moves_question_remainder_to_comments():
     bot = FakeBot(linked_chat_id=-100777)
     question = ('Длинный вопрос с подробностями. ' * 80) + 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА'
+    _remember_discussion_forward(-100777, 1, 501)
 
     await _send_publication_to_channel(
         bot,
@@ -206,13 +214,20 @@ async def test_long_voice_publication_moves_question_remainder_to_comments():
     assert comment[1] == -100777
     assert 'Продолжение вопроса №5' in comment[2]
     assert 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА' in comment[2]
-    assert comment[3]['reply_to_message_id'] == 1
+    assert comment[3]['reply_to_message_id'] == 501
+    assert comment[3]['parse_mode'] == 'HTML'
 
 
 @pytest.mark.asyncio
-async def test_long_voice_publication_falls_back_to_channel_message_when_comment_fails():
+async def test_long_voice_publication_falls_back_to_channel_message_when_comment_fails(monkeypatch):
     bot = FakeBot(linked_chat_id=-100777, fail_message_to={-100777})
     question = ('Длинный вопрос с подробностями. ' * 80) + 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА'
+    _remember_discussion_forward(-100777, 1, 502)
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr('app.handlers.admin.asyncio.sleep', no_sleep)
 
     await _send_publication_to_channel(
         bot,
@@ -231,6 +246,23 @@ async def test_long_voice_publication_falls_back_to_channel_message_when_comment
     assert fallback_message[1] == '@channel'
     assert 'Продолжение вопроса №5' in fallback_message[2]
     assert 'ФИНАЛЬНАЯ ЧАСТЬ ВОПРОСА' in fallback_message[2]
+
+
+@pytest.mark.asyncio
+async def test_automatic_forward_maps_channel_post_to_discussion_message():
+    message = SimpleNamespace(
+        is_automatic_forward=True,
+        forward_origin=SimpleNamespace(
+            chat=SimpleNamespace(id=-100555),
+            message_id=77,
+        ),
+        chat=SimpleNamespace(id=-100777),
+        message_id=901,
+    )
+
+    await remember_discussion_forward(message)
+
+    assert await _wait_for_discussion_forward(-100777, 77, timeout=0.01) == 901
 
 
 @pytest.mark.asyncio

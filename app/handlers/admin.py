@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyParameters, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.database import Database
 from app.keyboards import (
@@ -55,6 +57,45 @@ from app.utils import format_dt, h, language_name, normalize_lang, status_name, 
 router = Router(name='admin')
 MEDIA_CAPTION_LIMIT = 1024
 MEDIA_CAPTION_COMMENT_LIMIT = 800
+DISCUSSION_FORWARD_TIMEOUT = 5.0
+_discussion_message_ids: dict[tuple[int, int], int] = {}
+_discussion_waiters: dict[tuple[int, int], asyncio.Future[int]] = {}
+
+
+def _remember_discussion_forward(
+    linked_chat_id: int,
+    channel_message_id: int,
+    discussion_message_id: int,
+) -> None:
+    key = (linked_chat_id, channel_message_id)
+    waiter = _discussion_waiters.pop(key, None)
+    if waiter and not waiter.done():
+        waiter.set_result(discussion_message_id)
+        return
+    _discussion_message_ids[key] = discussion_message_id
+    while len(_discussion_message_ids) > 500:
+        _discussion_message_ids.pop(next(iter(_discussion_message_ids)))
+
+
+async def _wait_for_discussion_forward(
+    linked_chat_id: int,
+    channel_message_id: int,
+    *,
+    timeout: float = DISCUSSION_FORWARD_TIMEOUT,
+) -> int | None:
+    key = (linked_chat_id, channel_message_id)
+    known_message_id = _discussion_message_ids.pop(key, None)
+    if known_message_id is not None:
+        return known_message_id
+    waiter = asyncio.get_running_loop().create_future()
+    _discussion_waiters[key] = waiter
+    try:
+        return await asyncio.wait_for(waiter, timeout=timeout)
+    except TimeoutError:
+        return None
+    finally:
+        if _discussion_waiters.get(key) is waiter:
+            _discussion_waiters.pop(key, None)
 
 
 def is_admin(user_id: int | None, admin_ids: set[int]) -> bool:
@@ -229,14 +270,16 @@ async def _send_publication_to_channel(
             sent_message = await send_saved_media(caption=caption)
             message_id = getattr(sent_message, 'message_id', None)
             if linked_chat_id and question_remainder and message_id:
-                comment_sent = await _send_question_remainder_comment(
-                    bot,
-                    linked_chat_id=linked_chat_id,
-                    publication_channel=publication_channel,
-                    channel_message_id=message_id,
-                    ticket_id=row['ticket_id'],
-                    question_remainder=question_remainder,
-                )
+                discussion_message_id = await _wait_for_discussion_forward(linked_chat_id, message_id)
+                comment_sent = False
+                if discussion_message_id is not None:
+                    comment_sent = await _send_question_remainder_comment(
+                        bot,
+                        linked_chat_id=linked_chat_id,
+                        discussion_message_id=discussion_message_id,
+                        ticket_id=row['ticket_id'],
+                        question_remainder=question_remainder,
+                    )
                 if not comment_sent:
                     fallback_caption, _ = publication_caption_parts(
                         row,
@@ -277,48 +320,35 @@ async def _send_question_remainder_comment(
     bot,
     *,
     linked_chat_id: int,
-    publication_channel: int | str,
-    channel_message_id: int,
+    discussion_message_id: int,
     ticket_id: int,
     question_remainder: str,
 ) -> bool:
     chunks = split_telegram_text(question_remainder, limit=3600)
-    send_options = [
-        {
-            'reply_to_message_id': channel_message_id,
-            'allow_sending_without_reply': False,
-        },
-        {
-            'reply_parameters': ReplyParameters(
-                message_id=channel_message_id,
-                allow_sending_without_reply=False,
-            ),
-        },
-        {
-            'reply_parameters': ReplyParameters(
-                message_id=channel_message_id,
-                chat_id=publication_channel,
-                allow_sending_without_reply=False,
-            ),
-        },
-    ]
-    for options in send_options:
-        try:
-            for index, chunk in enumerate(chunks, start=1):
-                prefix = f'Продолжение вопроса №{ticket_id}:'
-                if len(chunks) > 1:
-                    prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
+    for index, chunk in enumerate(chunks, start=1):
+        prefix = f'Продолжение вопроса №{ticket_id}:'
+        if len(chunks) > 1:
+            prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
+        sent = False
+        for delay in (0, 0.5, 1.5):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
                 await bot.send_message(
                     linked_chat_id,
-                    f'{prefix}\n\n{chunk}',
-                    parse_mode=None,
+                    f'<b>{h(prefix)}</b>\n\n<i>{h(chunk)}</i>',
+                    parse_mode='HTML',
                     disable_web_page_preview=True,
-                    **options,
+                    reply_to_message_id=discussion_message_id,
+                    allow_sending_without_reply=False,
                 )
-        except Exception:
-            continue
-        return True
-    return False
+            except Exception:
+                continue
+            sent = True
+            break
+        if not sent:
+            return False
+    return True
 
 
 async def _send_question_remainder_to_channel(
@@ -335,8 +365,8 @@ async def _send_question_remainder_to_channel(
             prefix = f'Продолжение вопроса №{ticket_id}, часть {index}/{len(chunks)}:'
         await bot.send_message(
             publication_channel,
-            f'{prefix}\n\n{chunk}',
-            parse_mode=None,
+            f'<b>{h(prefix)}</b>\n\n<i>{h(chunk)}</i>',
+            parse_mode='HTML',
             disable_web_page_preview=True,
         )
 
@@ -358,6 +388,20 @@ async def _edit_media_caption(
     except Exception:
         return False
     return True
+
+
+@router.message(F.is_automatic_forward)
+async def remember_discussion_forward(message: Message) -> None:
+    origin = message.forward_origin
+    origin_chat = getattr(origin, 'chat', None)
+    channel_message_id = getattr(origin, 'message_id', None)
+    if origin_chat is None or channel_message_id is None:
+        return
+    _remember_discussion_forward(
+        linked_chat_id=message.chat.id,
+        channel_message_id=int(channel_message_id),
+        discussion_message_id=message.message_id,
+    )
 
 
 @router.message(CommandStart(), AdminFilter())

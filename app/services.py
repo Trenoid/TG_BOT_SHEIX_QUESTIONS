@@ -60,7 +60,7 @@ def _is_placeholder_text(text: str | None, content_type: object | None) -> bool:
 def message_text_preview(message: Message) -> str | None:
     text = message.text or message.caption
     if text and text.strip():
-        return text.strip()[:1000]
+        return text.strip()
     # Для голосовых/файлов/видео не сохраняем искусственный текст вроде
     # [ContentType.VOICE], иначе история выглядит сломанной. Тип и file_id
     # сохраняются отдельно.
@@ -365,7 +365,7 @@ def _publication_question_body(row: dict, *, limit: int | None = None) -> str:
     text = str(row.get('question_text')).strip()
     if limit is not None:
         text = _truncate_plain_text(text, limit)
-    return h(text)
+    return f'<i>{h(text)}</i>'
 
 
 def _publication_answer_body(row: dict, *, limit: int | None = None) -> str:
@@ -777,10 +777,27 @@ async def notify_staff_about_ticket(
     ]).strip()
     for sheikh_id in sheikh_ids - admin_ids:
         try:
-            card = await bot.send_message(sheikh_id, sheikh_text, reply_markup=sheikh_question_kb(ticket_id))
+            question_markup = sheikh_question_kb(ticket_id)
+            if len(sheikh_text) <= 4000:
+                card = await bot.send_message(sheikh_id, sheikh_text, reply_markup=question_markup)
+            else:
+                card = await bot.send_message(
+                    sheikh_id,
+                    '\n'.join([
+                        f"❓ <b>Вопрос №{ticket_id}</b>",
+                        f"🗣 {question_language_name(ticket.get('question_language'))}",
+                        '',
+                        'Полный вопрос отправлен следующим сообщением.',
+                    ]),
+                )
             await remember_sent(sheikh_id, card)
-            if message_file_id(user_message):
-                copied = await bot.copy_message(sheikh_id, user_message.chat.id, user_message.message_id)
+            if message_file_id(user_message) or len(sheikh_text) > 4000:
+                copied = await bot.copy_message(
+                    sheikh_id,
+                    user_message.chat.id,
+                    user_message.message_id,
+                    reply_markup=question_markup if len(sheikh_text) > 4000 else None,
+                )
                 await remember_sent(sheikh_id, copied)
         except Exception:
             logger.warning('Failed to notify sheikh %s about ticket %s', sheikh_id, ticket_id, exc_info=True)

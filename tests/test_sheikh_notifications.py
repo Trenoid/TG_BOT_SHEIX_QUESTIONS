@@ -48,8 +48,8 @@ class FakeBot:
         self.sent_messages.append((chat_id, text, kwargs))
         return self._sent()
 
-    async def copy_message(self, chat_id, from_chat_id, message_id):
-        self.copied_messages.append((chat_id, from_chat_id, message_id))
+    async def copy_message(self, chat_id, from_chat_id, message_id, **kwargs):
+        self.copied_messages.append((chat_id, from_chat_id, message_id, kwargs))
         return self._sent()
 
 
@@ -116,3 +116,52 @@ async def test_failed_sheikh_delivery_does_not_block_other_sheikhs(tmp_path):
 
     recipients = [chat_id for chat_id, _, _ in bot.sent_messages]
     assert recipients == [30]
+
+
+@pytest.mark.asyncio
+async def test_long_question_reaches_sheikh_without_1000_character_truncation(tmp_path):
+    db = Database(str(tmp_path / 'support_bot.db'))
+    await db.init()
+    ticket_id = await _create_ticket(db)
+    long_question = 'Начало ' + ('длинного вопроса ' * 80) + 'КОНЕЦ ВОПРОСА'
+    user_message = DummyMessage()
+    user_message.text = long_question
+    bot = FakeBot()
+
+    await notify_staff_about_ticket(
+        bot,
+        db,
+        admin_ids=set(),
+        sheikh_ids={20},
+        ticket_id=ticket_id,
+        user_message=user_message,
+    )
+
+    sheikh_text = next(text for chat_id, text, _ in bot.sent_messages if chat_id == 20)
+    assert 'Начало' in sheikh_text
+    assert 'КОНЕЦ ВОПРОСА' in sheikh_text
+    assert len(long_question) > 1000
+
+
+@pytest.mark.asyncio
+async def test_max_length_question_is_copied_to_sheikh_when_card_exceeds_limit(tmp_path):
+    db = Database(str(tmp_path / 'support_bot.db'))
+    await db.init()
+    ticket_id = await _create_ticket(db)
+    user_message = DummyMessage()
+    user_message.text = 'а' * 4096
+    bot = FakeBot()
+
+    await notify_staff_about_ticket(
+        bot,
+        db,
+        admin_ids=set(),
+        sheikh_ids={20},
+        ticket_id=ticket_id,
+        user_message=user_message,
+    )
+
+    assert len(bot.copied_messages) == 1
+    chat_id, from_chat_id, message_id, options = bot.copied_messages[0]
+    assert (chat_id, from_chat_id, message_id) == (20, 900, 55)
+    assert options['reply_markup'] is not None
