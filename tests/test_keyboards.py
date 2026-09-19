@@ -62,9 +62,12 @@ def test_sheikh_panel_is_minimal():
     assert callbacks == ['sheikh:list:open', 'sheikh:list:answered']
 
 
-def test_sheikh_question_keyboard_has_only_answer_button():
+def test_sheikh_question_keyboard_has_public_and_private_answer_buttons():
     callbacks = _callback_data(sheikh_question_kb(ticket_id=7))
-    assert callbacks == ['admin:answer:7']
+    assert callbacks == [
+        'sheikh:answer:publish:7',
+        'sheikh:answer:private:7',
+    ]
 
 
 def test_publication_review_keyboard_has_publish_only_when_allowed():

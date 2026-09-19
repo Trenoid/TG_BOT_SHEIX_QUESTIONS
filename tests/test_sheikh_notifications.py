@@ -137,10 +137,11 @@ async def test_long_question_reaches_sheikh_without_1000_character_truncation(tm
         user_message=user_message,
     )
 
-    sheikh_text = next(text for chat_id, text, _ in bot.sent_messages if chat_id == 20)
-    assert 'Начало' in sheikh_text
-    assert 'КОНЕЦ ВОПРОСА' in sheikh_text
     assert len(long_question) > 1000
+    assert len(bot.copied_messages) == 1
+    chat_id, from_chat_id, message_id, options = bot.copied_messages[0]
+    assert (chat_id, from_chat_id, message_id) == (20, 900, 55)
+    assert options['reply_markup'] is not None
 
 
 @pytest.mark.asyncio

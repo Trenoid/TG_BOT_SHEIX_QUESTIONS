@@ -144,7 +144,14 @@ def sheikh_panel_kb() -> InlineKeyboardMarkup:
 
 def sheikh_question_kb(ticket_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='✍️ Ответить', callback_data=f'admin:answer:{ticket_id}')],
+        [InlineKeyboardButton(
+            text='📣 Опубликовать в основной канал',
+            callback_data=f'sheikh:answer:publish:{ticket_id}',
+        )],
+        [InlineKeyboardButton(
+            text='✉️ Ответить лично',
+            callback_data=f'sheikh:answer:private:{ticket_id}',
+        )],
     ])
 
 

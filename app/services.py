@@ -304,6 +304,14 @@ def _plain_preview(value: str | None, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + '…'
 
 
+def _answer_publication_status_label(value: str | None) -> str:
+    if value == 'published':
+        return '✅ опубликован'
+    if value == 'private':
+        return '✉️ личный ответ'
+    return '🟡 ожидает публикации'
+
+
 CONTENT_TYPE_LABELS = {
     'text': '📝 Текстовое сообщение',
     'photo': '🖼 Фото',
@@ -317,6 +325,7 @@ CONTENT_TYPE_LABELS = {
 
 QUESTION_CONTINUATION_NOTE = '<i>Продолжение вопроса — в комментариях.</i>'
 QUESTION_CONTINUATION_NEXT_MESSAGE_NOTE = '<i>Продолжение вопроса — следующим сообщением.</i>'
+SHEIKH_INLINE_QUESTION_LIMIT = 1000
 
 
 def content_type_label(content_type: object | None) -> str:
@@ -633,7 +642,7 @@ def admin_answers_history_text(rows: list[dict], *, page: int = 0, total_pages: 
             answer_preview_source = content_type_label(row.get('content_type'))
         question_preview = h(_plain_preview(question_preview_source, 120))
         answer_preview = h(_plain_preview(answer_preview_source, 120))
-        publication_status = '✅ опубликован' if row.get('publication_status') == 'published' else '🟡 ожидает публикации'
+        publication_status = _answer_publication_status_label(row.get('publication_status'))
         lines.extend([
             '',
             f"<b>#{row['ticket_id']} · ответ №{row.get('answer_number') or 1} · {category_name(row.get('category'), 'ru')}</b>",
@@ -656,7 +665,7 @@ def admin_answer_full_text(row: dict) -> str:
     admin_username = f"@{h(row.get('admin_username'))}" if row.get('admin_username') else '—'
     question = _message_body(row.get('question_text'), row.get('question_content_type'), row.get('question_file_id'))
     answer = _message_body(row.get('answer_text'), row.get('content_type'), row.get('answer_file_id'))
-    publication_status = '✅ опубликован' if row.get('publication_status') == 'published' else '🟡 ожидает публикации'
+    publication_status = _answer_publication_status_label(row.get('publication_status'))
 
     return '\n'.join([
         f"📄 <b>Полная карточка ответа #{row['message_id']}</b>",
@@ -778,7 +787,8 @@ async def notify_staff_about_ticket(
     for sheikh_id in sheikh_ids - admin_ids:
         try:
             question_markup = sheikh_question_kb(ticket_id)
-            if len(sheikh_text) <= 4000:
+            send_original = bool(message_file_id(user_message)) or len(sheikh_text) > SHEIKH_INLINE_QUESTION_LIMIT
+            if not send_original:
                 card = await bot.send_message(sheikh_id, sheikh_text, reply_markup=question_markup)
             else:
                 card = await bot.send_message(
@@ -791,12 +801,12 @@ async def notify_staff_about_ticket(
                     ]),
                 )
             await remember_sent(sheikh_id, card)
-            if message_file_id(user_message) or len(sheikh_text) > 4000:
+            if send_original:
                 copied = await bot.copy_message(
                     sheikh_id,
                     user_message.chat.id,
                     user_message.message_id,
-                    reply_markup=question_markup if len(sheikh_text) > 4000 else None,
+                    reply_markup=question_markup,
                 )
                 await remember_sent(sheikh_id, copied)
         except Exception:

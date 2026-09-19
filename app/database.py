@@ -184,16 +184,17 @@ class Database:
                 WHERE status != 'closed'
                   AND EXISTS (
                       SELECT 1
-                      FROM ticket_messages any_answer
-                      WHERE any_answer.ticket_id = tickets.id
-                        AND any_answer.sender_type IN ('admin', 'sheikh')
+                      FROM ticket_messages published_answer
+                      WHERE published_answer.ticket_id = tickets.id
+                        AND published_answer.sender_type IN ('admin', 'sheikh')
+                        AND published_answer.publication_status = 'published'
                   )
                   AND NOT EXISTS (
                       SELECT 1
                       FROM ticket_messages pending_answer
                       WHERE pending_answer.ticket_id = tickets.id
                         AND pending_answer.sender_type IN ('admin', 'sheikh')
-                        AND pending_answer.publication_status != 'published'
+                        AND pending_answer.publication_status = 'pending'
                   )
                 '''
             )
@@ -489,9 +490,13 @@ class Database:
         text: str | None,
         content_type: str | None,
         file_id: str | None = None,
+        publication_status: str | None = None,
     ) -> int:
         ts = now_iso()
-        publication_status = 'pending' if sender_type in {'admin', 'sheikh'} else None
+        if sender_type not in {'admin', 'sheikh'}:
+            publication_status = None
+        elif publication_status is None:
+            publication_status = 'pending'
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 '''
@@ -579,19 +584,22 @@ class Database:
             '''
             SELECT
                 COUNT(*),
-                SUM(CASE WHEN publication_status = 'published' THEN 0 ELSE 1 END)
+                SUM(CASE WHEN publication_status = 'pending' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN publication_status = 'published' THEN 1 ELSE 0 END)
             FROM ticket_messages
             WHERE ticket_id = ? AND sender_type IN ('admin', 'sheikh')
             ''',
             (ticket_id,),
         )
-        answer_count, pending_count = await cursor.fetchone()
+        answer_count, pending_count, published_count = await cursor.fetchone()
         if not answer_count:
             status = 'open'
         elif pending_count:
             status = 'answered'
-        else:
+        elif published_count:
             status = 'published'
+        else:
+            status = 'answered'
         await db.execute(
             'UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?',
             (status, ts or now_iso(), ticket_id),

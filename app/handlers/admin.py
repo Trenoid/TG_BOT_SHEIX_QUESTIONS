@@ -57,6 +57,7 @@ from app.utils import format_dt, h, language_name, normalize_lang, status_name, 
 router = Router(name='admin')
 MEDIA_CAPTION_LIMIT = 1024
 MEDIA_CAPTION_COMMENT_LIMIT = 800
+SHEIKH_TEXT_LIMIT = 4000
 DISCUSSION_FORWARD_TIMEOUT = 5.0
 _discussion_message_ids: dict[tuple[int, int], int] = {}
 _discussion_waiters: dict[tuple[int, int], asyncio.Future[int]] = {}
@@ -204,6 +205,146 @@ async def _edit_role_panel(callback: CallbackQuery, db: Database, admin_ids: set
         await _edit_sheikh_panel(callback, db)
     else:
         await _edit_admin_panel(callback, db)
+
+
+def _plain_chunks(text: str, limit: int = SHEIKH_TEXT_LIMIT) -> list[str]:
+    return [text[index:index + limit] for index in range(0, len(text), limit)] or ['—']
+
+
+def _message_for_sender(messages: list[dict], sender_type: str, *, latest: bool = False) -> dict | None:
+    source = reversed(messages) if latest else messages
+    return next((item for item in source if item.get('sender_type') == sender_type), None)
+
+
+def _plain_message_body(item: dict | None) -> str:
+    if not item:
+        return '—'
+    text = str(item.get('text') or '').strip()
+    return text or content_type_label(item.get('content_type'))
+
+
+async def _show_sheikh_question(callback: CallbackQuery, ticket: dict, messages: list[dict]) -> None:
+    card = sheikh_question_text(ticket, messages)
+    markup = sheikh_question_kb(ticket['id'])
+    if len(card) <= SHEIKH_TEXT_LIMIT:
+        await callback.message.edit_text(card, reply_markup=markup)
+        return
+
+    question = _plain_message_body(_message_for_sender(messages, 'user'))
+    chunks = _plain_chunks(question)
+    await callback.message.edit_text(
+        f"❓ <b>Вопрос №{ticket['id']}</b>\n\nПолный текст вопроса отправлен ниже."
+    )
+    for index, chunk in enumerate(chunks):
+        await callback.message.answer(
+            chunk,
+            parse_mode=None,
+            reply_markup=markup if index == len(chunks) - 1 else None,
+        )
+
+
+async def _show_sheikh_answered(callback: CallbackQuery, ticket: dict, messages: list[dict]) -> None:
+    card = sheikh_answered_text(ticket, messages)
+    if len(card) <= SHEIKH_TEXT_LIMIT:
+        await callback.message.edit_text(card)
+        return
+
+    question = _plain_message_body(_message_for_sender(messages, 'user'))
+    answer = _plain_message_body(_message_for_sender(messages, 'sheikh', latest=True))
+    await callback.message.edit_text(
+        f"✅ <b>Вопрос №{ticket['id']} отвечен</b>\n\nПолные тексты отправлены ниже."
+    )
+    await callback.message.answer('<b>Вопрос:</b>')
+    for chunk in _plain_chunks(question):
+        await callback.message.answer(chunk, parse_mode=None)
+    await callback.message.answer('<b>Ответ:</b>')
+    for chunk in _plain_chunks(answer):
+        await callback.message.answer(chunk, parse_mode=None)
+
+
+def _answer_mode_notice(answer_mode: str | None) -> str | None:
+    if answer_mode == 'publish':
+        return '📣 <b>Режим:</b> ответ будет отправлен автору и опубликован в основной канал.'
+    if answer_mode == 'private':
+        return '✉️ <b>Режим:</b> ответ получит только автор вопроса. В канал он не попадёт.'
+    return None
+
+
+async def _send_answer_prompt(
+    message: Message,
+    ticket: dict,
+    messages: list[dict],
+    *,
+    answer_mode: str | None = None,
+) -> None:
+    notice = _answer_mode_notice(answer_mode)
+    prompt = answer_prompt_text(ticket, messages)
+    full_prompt = f'{notice}\n\n{prompt}' if notice else prompt
+    if len(full_prompt) <= SHEIKH_TEXT_LIMIT:
+        await message.answer(full_prompt)
+        return
+
+    await message.answer(
+        '\n\n'.join(part for part in [notice, '✍️ <b>Напишите ответ для вопроса:</b>'] if part)
+    )
+    question = _plain_message_body(_message_for_sender(messages, 'user'))
+    for chunk in _plain_chunks(question):
+        await message.answer(chunk, parse_mode=None)
+    await message.answer(
+        'Можно отправить текст, фото, документ, видео или голосовое. Чтобы отменить: /cancel'
+    )
+
+
+async def _send_answer_to_user(
+    bot,
+    ticket: dict,
+    messages: list[dict],
+    *,
+    answer_chat_id: int,
+    answer_message_id: int,
+) -> None:
+    intro = user_answer_intro_text(ticket, messages)
+    if len(intro) <= SHEIKH_TEXT_LIMIT:
+        await bot.send_message(ticket['user_id'], intro)
+    else:
+        await bot.send_message(ticket['user_id'], '💬 <b>Ответ на ваш вопрос:</b>')
+        question = _plain_message_body(_message_for_sender(messages, 'user'))
+        for chunk in _plain_chunks(question):
+            await bot.send_message(ticket['user_id'], chunk, parse_mode=None)
+    await bot.copy_message(ticket['user_id'], answer_chat_id, answer_message_id)
+    await bot.send_message(ticket['user_id'], t(ticket.get('language'), 'after_answer'))
+
+
+async def _update_sheikh_source_card(
+    bot,
+    *,
+    source_chat_id: int | None,
+    source_message_id: int | None,
+    ticket: dict,
+    messages: list[dict],
+) -> None:
+    if not source_chat_id or not source_message_id:
+        return
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=source_chat_id,
+            message_id=source_message_id,
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+    answered_card = sheikh_answered_text(ticket, messages)
+    if len(answered_card) > SHEIKH_TEXT_LIMIT:
+        return
+    try:
+        await bot.edit_message_text(
+            answered_card,
+            chat_id=source_chat_id,
+            message_id=source_message_id,
+            reply_markup=None,
+        )
+    except Exception:
+        pass
 
 
 async def _send_publication_to_channel(
@@ -431,6 +572,9 @@ async def sheikh_help(message: Message, db: Database, admin_ids: set[int], sheik
             '<b>Помощь для шейха</b>\n\n'
             '🟢 <b>Неотвеченные вопросы</b> — вопросы, на которые ещё нужно ответить.\n'
             '🟡 <b>Отвеченные вопросы</b> — вопросы, по которым уже был дан ответ.\n\n'
+            'В карточке вопроса выберите:\n'
+            '📣 <b>Опубликовать в основной канал</b> — ответ получит автор и он будет опубликован.\n'
+            '✉️ <b>Ответить лично</b> — ответ получит только автор вопроса.\n\n'
             'Команды:\n'
             '/start — открыть меню\n'
             '/panel — открыть меню\n'
@@ -552,9 +696,9 @@ async def sheikh_view_ticket(callback: CallbackQuery, db: Database, admin_ids: s
         return
     messages = await db.get_messages_with_senders(ticket_id, limit=30)
     if ticket['status'] == 'open':
-        await callback.message.edit_text(sheikh_question_text(ticket, messages), reply_markup=sheikh_question_kb(ticket_id))
+        await _show_sheikh_question(callback, ticket, messages)
     else:
-        await callback.message.edit_text(sheikh_answered_text(ticket, messages))
+        await _show_sheikh_answered(callback, ticket, messages)
     await callback.answer()
 
 
@@ -578,10 +722,27 @@ async def answer_command(message: Message, state: FSMContext, db: Database, admi
     if access_error:
         await message.answer(access_error)
         return
+    sheikh_role = is_sheikh_only(message.from_user.id, admin_ids, sheikh_ids)
+    if sheikh_role:
+        await message.answer(
+            f'Выберите, как ответить на вопрос №<b>{ticket_id}</b>:',
+            reply_markup=sheikh_question_kb(ticket_id),
+        )
+        return
     await state.set_state(AdminAnswerState.waiting_answer)
-    await state.update_data(ticket_id=ticket_id, source_chat_id=None, source_message_id=None)
+    await state.update_data(
+        ticket_id=ticket_id,
+        source_chat_id=None,
+        source_message_id=None,
+        answer_mode='admin',
+    )
     messages = await db.get_messages_with_senders(ticket_id, limit=30)
-    await message.answer(answer_prompt_text(ticket, messages))
+    await _send_answer_prompt(
+        message,
+        ticket,
+        messages,
+        answer_mode=None,
+    )
 
 
 @router.message(Command('close'), AdminFilter())
@@ -1155,6 +1316,43 @@ async def admin_send_saved_media(callback: CallbackQuery, db: Database, admin_id
     await callback.answer('Оригинал отправлен отдельным сообщением.')
 
 
+@router.callback_query(F.data.startswith('sheikh:answer:'), AdminFilter())
+async def sheikh_answer_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    admin_ids: set[int],
+    sheikh_ids: set[int] | None = None,
+) -> None:
+    if not is_sheikh_only(callback.from_user.id, admin_ids, sheikh_ids):
+        await callback.answer('Недостаточно прав.', show_alert=True)
+        return
+    parts = callback.data.split(':')
+    if len(parts) != 4 or parts[2] not in {'publish', 'private'} or not parts[3].isdigit():
+        await callback.answer('Неверная кнопка ответа.', show_alert=True)
+        return
+    answer_mode = parts[2]
+    ticket_id = int(parts[3])
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        await callback.answer('Вопрос не найден.', show_alert=True)
+        return
+    access_error = answer_access_error(ticket['status'], sheikh_role=True)
+    if access_error:
+        await callback.answer(access_error, show_alert=True)
+        return
+    await state.set_state(AdminAnswerState.waiting_answer)
+    await state.update_data(
+        ticket_id=ticket_id,
+        source_chat_id=callback.message.chat.id,
+        source_message_id=callback.message.message_id,
+        answer_mode=answer_mode,
+    )
+    messages = await db.get_messages_with_senders(ticket_id, limit=30)
+    await _send_answer_prompt(callback.message, ticket, messages, answer_mode=answer_mode)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith('admin:answer:'), AdminFilter())
 async def admin_answer_start(callback: CallbackQuery, state: FSMContext, db: Database, admin_ids: set[int], sheikh_ids: set[int] | None = None) -> None:
     if not is_staff(callback.from_user.id, admin_ids, sheikh_ids):
@@ -1172,14 +1370,27 @@ async def admin_answer_start(callback: CallbackQuery, state: FSMContext, db: Dat
     if access_error:
         await callback.answer(access_error, show_alert=True)
         return
+    if is_sheikh_only(callback.from_user.id, admin_ids, sheikh_ids):
+        await callback.message.answer(
+            f'Выберите, как ответить на вопрос №<b>{ticket_id}</b>:',
+            reply_markup=sheikh_question_kb(ticket_id),
+        )
+        await callback.answer()
+        return
     await state.set_state(AdminAnswerState.waiting_answer)
     await state.update_data(
         ticket_id=ticket_id,
         source_chat_id=callback.message.chat.id,
         source_message_id=callback.message.message_id,
+        answer_mode='admin',
     )
     messages = await db.get_messages_with_senders(ticket_id, limit=30)
-    await callback.message.answer(answer_prompt_text(ticket, messages))
+    await _send_answer_prompt(
+        callback.message,
+        ticket,
+        messages,
+        answer_mode=None,
+    )
     await callback.answer()
 
 
@@ -1208,6 +1419,8 @@ async def admin_send_answer(
     panel_markup = sheikh_panel_kb() if sheikh_role else admin_panel_kb()
     data = await state.get_data()
     ticket_id = int(data['ticket_id'])
+    answer_mode = str(data.get('answer_mode') or ('publish' if sheikh_role else 'admin'))
+    private_sheikh_answer = sheikh_role and answer_mode == 'private'
     ticket = await db.get_ticket(ticket_id)
     if not ticket:
         await state.clear()
@@ -1236,6 +1449,7 @@ async def admin_send_answer(
         text=answer_text,
         content_type=answer_content_type,
         file_id=answer_file_id,
+        publication_status='private' if private_sheikh_answer else None,
     )
     await db.set_status(ticket_id, 'answered')
     ticket = await db.get_ticket(ticket_id)
@@ -1243,26 +1457,32 @@ async def admin_send_answer(
     messages_for_user = await db.get_messages_with_senders(ticket_id, limit=30)
 
     try:
-        await message.bot.send_message(ticket['user_id'], user_answer_intro_text(ticket, messages_for_user))
-        await message.bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
-        await message.bot.send_message(ticket['user_id'], t(ticket.get('language'), 'after_answer'))
+        await _send_answer_to_user(
+            message.bot,
+            ticket,
+            messages_for_user,
+            answer_chat_id=message.chat.id,
+            answer_message_id=message.message_id,
+        )
     except Exception:
         await message.answer('Ответ сохранён, но не удалось отправить его пользователю. Возможно, пользователь заблокировал бота.', reply_markup=panel_markup)
 
     if sheikh_role:
-        source_chat_id = data.get('source_chat_id')
-        source_message_id = data.get('source_message_id')
-        if source_chat_id and source_message_id:
-            messages = await db.get_messages_with_senders(ticket_id, limit=30)
-            try:
-                await message.bot.edit_message_text(
-                    sheikh_answered_text(ticket, messages),
-                    chat_id=source_chat_id,
-                    message_id=source_message_id,
-                    reply_markup=None,
-                )
-            except Exception:
-                pass
+        messages = await db.get_messages_with_senders(ticket_id, limit=30)
+        await _update_sheikh_source_card(
+            message.bot,
+            source_chat_id=data.get('source_chat_id'),
+            source_message_id=data.get('source_message_id'),
+            ticket=ticket,
+            messages=messages,
+        )
+        if private_sheikh_answer:
+            await message.answer(
+                f'✅ Вы ответили лично на вопрос №<b>{ticket_id}</b>. '
+                'Ответ не опубликован в канал.',
+                reply_markup=sheikh_panel_kb(),
+            )
+            return
         row = await db.get_sheikh_answer_for_publication(answer_message_id)
         if row and publication_channel is not None and can_auto_publish_via_bot(row):
             try:
