@@ -844,6 +844,39 @@ async def notify_admins_about_publication_ready(
             continue
 
 
+async def notify_admins_about_private_answer(
+    bot: Bot,
+    admin_ids: set[int],
+    answer_row: dict,
+    *,
+    source_chat_id: int,
+    source_message_id: int,
+) -> None:
+    question = str(answer_row.get('question_text') or '').strip()
+    if _is_placeholder_text(question, answer_row.get('question_content_type')):
+        question = content_type_label(answer_row.get('question_content_type'))
+    question_chunks = [question[index:index + 3900] for index in range(0, len(question), 3900)] or ['—']
+    for admin_id in admin_ids:
+        try:
+            await bot.send_message(
+                admin_id,
+                '\n'.join([
+                    '✉️ <b>Личный ответ шейха</b>',
+                    f"❓ Вопрос №<b>{answer_row['ticket_id']}</b>",
+                    '📌 Ответ отправлен автору лично и не опубликован в канал.',
+                    '',
+                    '<b>Полный вопрос:</b>',
+                ]),
+                reply_markup=admin_ticket_kb(answer_row['ticket_id'], answer_row.get('status') or 'answered'),
+            )
+            for chunk in question_chunks:
+                await bot.send_message(admin_id, chunk, parse_mode=None)
+            await bot.send_message(admin_id, '<b>Ответ шейха:</b>')
+            await bot.copy_message(admin_id, source_chat_id, source_message_id)
+        except Exception:
+            continue
+
+
 async def notify_admins_status(bot: Bot, admin_ids: set[int], ticket: dict, text: str) -> None:
     for admin_id in admin_ids:
         try:

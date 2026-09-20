@@ -174,19 +174,21 @@ async def test_private_sheikh_answer_is_only_sent_to_user(tmp_path):
         message,
         state,
         db,
-        admin_ids=set(),
+        admin_ids={900},
         sheikh_ids={20},
         publication_channel='@main_channel',
     )
 
     assert state.cleared is True
-    assert all(call[1] == 100 for call in bot.calls if call[0] in {'message', 'copy'})
     assert not any(call[1] == '@main_channel' for call in bot.calls if call[0] == 'message')
+    assert any(call[0] == 'message' and call[1] == 900 and 'Личный ответ шейха' in call[2] for call in bot.calls)
+    assert any(call[0] == 'message' and call[1] == 900 and 'Полный вопрос' in call[2] for call in bot.calls)
+    assert any(call[0] == 'copy' and call[1:4] == (900, 20, 700) for call in bot.calls)
     rows = await db.list_admin_answers(limit=10)
     assert rows[0]['publication_status'] == 'private'
     assert await db.list_sheikh_answers_for_publication(status='answered') == []
     assert (await db.get_ticket(ticket_id))['status'] == 'answered'
-    assert any('не опубликован в канал' in text for text, _ in message.answers)
+    assert any('копия отправлена администратору' in text for text, _ in message.answers)
 
     await db.init()
     assert (await db.get_ticket(ticket_id))['status'] == 'answered'

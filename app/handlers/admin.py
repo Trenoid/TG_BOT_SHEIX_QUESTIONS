@@ -39,6 +39,7 @@ from app.services import (
     normalize_content_type_value,
     QUESTION_CONTINUATION_NEXT_MESSAGE_NOTE,
     publication_caption_parts,
+    notify_admins_about_private_answer,
     notify_admins_about_publication_ready,
     notify_admins_status,
     publication_caption_text,
@@ -1477,9 +1478,18 @@ async def admin_send_answer(
             messages=messages,
         )
         if private_sheikh_answer:
+            row = await db.get_sheikh_answer_for_publication(answer_message_id)
+            if row:
+                await notify_admins_about_private_answer(
+                    message.bot,
+                    admin_ids,
+                    row,
+                    source_chat_id=message.chat.id,
+                    source_message_id=message.message_id,
+                )
             await message.answer(
                 f'✅ Вы ответили лично на вопрос №<b>{ticket_id}</b>. '
-                'Ответ не опубликован в канал.',
+                'Ответ не опубликован в канал, копия отправлена администратору.',
                 reply_markup=sheikh_panel_kb(),
             )
             return
