@@ -360,12 +360,17 @@ async def _send_publication_to_channel(
     answer_content_type = normalize_content_type_value(row.get('content_type'))
     question_file_id = row.get('question_file_id')
     question_content_type = normalize_content_type_value(row.get('question_content_type'))
-    if answer_file_id:
-        file_id = answer_file_id
-        content_type = answer_content_type
-    elif question_file_id and question_content_type in {'photo', 'video'}:
+    question_has_publishable_media = bool(
+        question_file_id and question_content_type in {'photo', 'video'}
+        and not is_answer_continuation(row)
+    )
+    answer_has_media = bool(answer_file_id)
+    if question_has_publishable_media:
         file_id = question_file_id
         content_type = question_content_type
+    elif answer_has_media:
+        file_id = answer_file_id
+        content_type = answer_content_type
     else:
         file_id = None
         content_type = answer_content_type
@@ -375,20 +380,33 @@ async def _send_publication_to_channel(
         else f"Ответ шейха по вопросу №{row['ticket_id']}"
     )
 
-    async def send_saved_media(caption: str | None = None):
-        if content_type == 'voice':
-            return await bot.send_voice(publication_channel, file_id, caption=caption, parse_mode='HTML')
-        elif content_type == 'audio':
-            return await bot.send_audio(publication_channel, file_id, caption=caption, parse_mode='HTML')
-        elif content_type == 'photo':
-            return await bot.send_photo(publication_channel, file_id, caption=caption, parse_mode='HTML')
-        elif content_type == 'video':
-            return await bot.send_video(publication_channel, file_id, caption=caption, parse_mode='HTML')
-        elif content_type == 'document':
-            return await bot.send_document(publication_channel, file_id, caption=caption, parse_mode='HTML')
-        elif content_type == 'sticker':
-            return await bot.send_sticker(publication_channel, file_id)
+    async def send_saved_media(
+        saved_content_type: str,
+        saved_file_id: str,
+        caption: str | None = None,
+    ):
+        if saved_content_type == 'voice':
+            return await bot.send_voice(publication_channel, saved_file_id, caption=caption, parse_mode='HTML')
+        elif saved_content_type == 'audio':
+            return await bot.send_audio(publication_channel, saved_file_id, caption=caption, parse_mode='HTML')
+        elif saved_content_type == 'photo':
+            return await bot.send_photo(publication_channel, saved_file_id, caption=caption, parse_mode='HTML')
+        elif saved_content_type == 'video':
+            return await bot.send_video(publication_channel, saved_file_id, caption=caption, parse_mode='HTML')
+        elif saved_content_type == 'document':
+            return await bot.send_document(publication_channel, saved_file_id, caption=caption, parse_mode='HTML')
+        elif saved_content_type == 'sticker':
+            return await bot.send_sticker(publication_channel, saved_file_id)
         return None
+
+    async def send_separate_answer_media() -> None:
+        if not (question_has_publishable_media and answer_has_media):
+            return
+        await send_saved_media(
+            answer_content_type,
+            answer_file_id,
+            caption=media_caption if answer_content_type != 'sticker' else None,
+        )
 
     if file_id:
         can_caption = content_type in {'voice', 'audio', 'photo', 'video', 'document'}
@@ -409,7 +427,7 @@ async def _send_publication_to_channel(
                     limit=MEDIA_CAPTION_LIMIT,
                 )
                 question_remainder = None
-            sent_message = await send_saved_media(caption=caption)
+            sent_message = await send_saved_media(content_type, file_id, caption=caption)
             message_id = getattr(sent_message, 'message_id', None)
             if linked_chat_id and question_remainder and message_id:
                 discussion_message_id = await _wait_for_discussion_forward(linked_chat_id, message_id)
@@ -442,12 +460,18 @@ async def _send_publication_to_channel(
                         ticket_id=row['ticket_id'],
                         question_remainder=question_remainder,
                     )
+            await send_separate_answer_media()
             return
 
     for chunk in split_telegram_text(text):
         await bot.send_message(publication_channel, chunk, parse_mode='HTML', disable_web_page_preview=True)
     if file_id:
-        await send_saved_media(caption=media_caption if content_type != 'sticker' else None)
+        await send_saved_media(
+            content_type,
+            file_id,
+            caption=media_caption if content_type != 'sticker' else None,
+        )
+        await send_separate_answer_media()
 
 
 async def _linked_discussion_chat_id(bot, publication_channel: int | str) -> int | None:

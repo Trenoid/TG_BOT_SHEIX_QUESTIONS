@@ -161,7 +161,7 @@ async def test_text_answer_keeps_question_photo_or_video_in_publication(question
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('answer_content_type', ['voice', 'audio'])
-async def test_audio_answer_file_has_priority_over_question_media(answer_content_type):
+async def test_question_photo_and_audio_answer_are_both_published(answer_content_type):
     bot = FakeBot()
     row = _row(None)
     row['question_content_type'] = 'photo'
@@ -171,9 +171,31 @@ async def test_audio_answer_file_has_priority_over_question_media(answer_content
 
     await _send_publication_to_channel(bot, row, publication_channel='@channel')
 
+    expected_label = '🎙 Голосовое сообщение' if answer_content_type == 'voice' else '🎧 Аудио'
+    assert len(bot.calls) == 2
+    assert bot.calls[0][0] == 'photo'
+    assert bot.calls[0][2] == 'question_photo_file_id'
+    assert 'ВОПРОС ❓' in bot.calls[0][3]
+    assert expected_label in bot.calls[0][3]
+    assert bot.calls[1][0] == answer_content_type
+    assert bot.calls[1][2] == f'answer_{answer_content_type}_file_id'
+    assert 'Ответ шейха по вопросу №5' in bot.calls[1][3]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_voice_does_not_repeat_question_photo():
+    bot = FakeBot()
+    row = _row(None)
+    row['question_content_type'] = 'photo'
+    row['question_file_id'] = 'question_photo_file_id'
+    row['answer_number'] = 2
+
+    await _send_publication_to_channel(bot, row, publication_channel='@channel')
+
     assert len(bot.calls) == 1
-    assert bot.calls[0][0] == answer_content_type
-    assert bot.calls[0][2] == f'answer_{answer_content_type}_file_id'
+    assert bot.calls[0][0] == 'voice'
+    assert bot.calls[0][2] == 'voice_file_id'
+    assert 'ПРОДОЛЖЕНИЕ ОТВЕТА' in bot.calls[0][3]
 
 
 @pytest.mark.asyncio
